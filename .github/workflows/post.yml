@@ -1,0 +1,38 @@
+name: 스레드 글 발행
+
+on:
+  workflow_dispatch:
+    inputs:
+      post_text:
+        description: "올릴 글 내용 (줄바꿈은 \\n 으로 입력)"
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt
+
+      - name: 글 발행
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          RAW_TEXT: ${{ inputs.post_text }}
+        run: |
+          python - << 'EOF'
+          import os
+          os.environ["POST_TEXT"] = os.environ.get("RAW_TEXT", "").replace("\\n", "\n")
+          import post_thread
+          post_thread.main()
+          EOF
