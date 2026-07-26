@@ -61,14 +61,15 @@ WEEKDAY_ANGLES = {
     6: "다음 주를 준비하는 관점에서 AI 트렌드 한 가지",
 }
 
-# 첫 줄 후킹 공식 — 부드럽지만 눈길이 가는 패턴들 (날마다 랜덤 지정)
+# 첫 줄 공식 — 어그로 없이 '정보의 힘'으로 스크롤을 멈추게 하는 패턴 (날마다 랜덤)
+# 공통 원칙: 배경 설명으로 시작하지 말고, 가장 놀랍고 구체적인 사실을 첫 줄에 바로 꺼낸다.
 HOOK_PATTERNS = [
-    '뉴스의 핵심을 한 문장으로 요약해 던지기 (예: "이제 OO도 AI가 대신한다고 해요")',
-    '독자에게 부드럽게 묻기 (예: "OO 해보신 적 있으세요?")',
-    '몰랐던 사실에 공감하기 (예: "저도 이건 오늘 처음 알았는데요")',
-    '변화의 신호를 짚기 (예: "요즘 OO 쪽 분위기가 달라지고 있어요")',
-    '알아두면 좋은 정보로 시작 (예: "오늘 이건 알아두시면 좋을 것 같아요")',
-    '독자와 관련짓기 (예: "OO 하시는 분들은 눈여겨볼 만한 소식이에요")',
+    '가장 놀라운 사실을 그대로 첫 줄에 (예: "AI로 찍어낸 영상, 이제 수익 내기 어려워진대요")',
+    '변화의 결과를 먼저 (예: "이제 OO는 무료로 할 수 있게 됐어요")',
+    '독자에게 직접 영향을 주는 지점부터 (예: "OO 하시는 분들, 이번 주부터 달라져요")',
+    '숫자나 구체적 사실로 시작 (예: "이 작업, 10분이면 끝난다고 해요")',
+    '기존 상식이 바뀐 지점을 짚기 (예: "지금까지 OO였는데, 이제 반대가 됐어요")',
+    '가장 실용적인 결론을 먼저 (예: "이것만 알아두면 OO는 안 하셔도 돼요")',
 ]
 
 # ── 상태 관리 ────────────────────────────────────────────────
@@ -178,6 +179,60 @@ def collect_topics(window, now_kst, used_titles):
     return topics, theme
 
 
+# ── 줄바꿈 후처리 (AI가 지시를 안 지켜도 코드로 보정) ────────
+
+# 문장을 끊기 좋은 구두점 (이 뒤에서 우선적으로 줄을 나눈다)
+BREAK_MARKS = ("。", ".", "!", "?", ",", "~")
+
+
+def wrap_lines(text, limit=20):
+    """한 줄이 limit자를 넘으면 어절(띄어쓰기) 단위로 자연스럽게 끊어 준다.
+
+    - 단어 중간에서는 절대 끊지 않는다
+    - 구두점(. , ? !) 뒤에서 끊는 것을 우선한다
+    - 빈 줄(단락 구분)은 그대로 보존한다
+    """
+    out_lines = []
+    for raw in text.split("\n"):
+        line = raw.strip()
+        if not line:
+            out_lines.append("")
+            continue
+
+        words = line.split()
+        cur = ""
+        for w in words:
+            candidate = (cur + " " + w).strip()
+            if cur and len(candidate) > limit:
+                out_lines.append(cur)
+                cur = w
+            else:
+                cur = candidate
+                # 구두점으로 끝나고 이미 적당한 길이면 여기서 끊는 게 자연스럽다
+                if cur.endswith(BREAK_MARKS) and len(cur) >= limit * 0.6:
+                    out_lines.append(cur)
+                    cur = ""
+        if cur:
+            out_lines.append(cur)
+
+    # 이모지 등 아주 짧은 조각이 혼자 줄에 남으면 앞 줄에 붙인다
+    merged = []
+    for l in out_lines:
+        if (l and len(l) <= 3 and merged and merged[-1]
+                and len(merged[-1]) + len(l) + 1 <= limit + 4):
+            merged[-1] = merged[-1] + " " + l
+        else:
+            merged.append(l)
+
+    # 연속된 빈 줄은 하나로 정리
+    result = []
+    for l in merged:
+        if l == "" and result and result[-1] == "":
+            continue
+        result.append(l)
+    return "\n".join(result).strip()
+
+
 # ── Gemini로 글 작성 (무료 등급) ─────────────────────────────
 
 def write_post(topics, theme, window, now_kst):
@@ -192,6 +247,16 @@ def write_post(topics, theme, window, now_kst):
         if t.get("summary"):
             line += f"\n  요약: {t['summary']}"
         news_lines.append(line)
+
+    # 팔로우 전환용 각인 문구 — 매번 넣으면 광고처럼 보이므로 주 2회만 (월/금 아침)
+    show_identity = (window == "morning" and now_kst.weekday() in (0, 4))
+    identity_rule = ("""
+[계정 각인 — 오늘은 넣습니다]
+마지막 질문 바로 앞에, 이 계정이 무엇을 하는 곳인지 알려주는 짧은 한 줄을 자연스럽게 넣으세요.
+광고처럼 들리지 않게, 담백하게 한 줄이면 충분합니다.
+(예: "AI 어렵지 않게 풀어드리는 이야기, 계속 올릴게요")
+"팔로우 해주세요" 같은 직접적인 요청은 쓰지 않습니다.
+""" if show_identity else "")
 
     if window == "morning":
         corner = """[오늘의 코너: 아침 뉴스 해석]
@@ -229,11 +294,18 @@ def write_post(topics, theme, window, now_kst):
 오늘의 앵글: {angle}
 
 {corner}
+{identity_rule}
+[첫 줄 — 가장 중요]
+첫 줄은 이 패턴으로: {hook}
 
-[첫 줄]
-첫 줄은 이 패턴으로 부드럽게 시작: {hook}
-첫 줄은 스크롤을 멈추게 하는 가장 중요한 한 줄입니다. 숫자·의외성·질문 중 하나를 자연스럽게 담되, 경고·명령·자극적인 표현은 쓰지 않습니다.
-첫 줄에서 약속한 내용은 본문에서 반드시 지킵니다.
+첫 줄에서 스크롤이 멈추지 않으면 아무도 나머지를 읽지 않습니다.
+반드시 지킬 것:
+- 배경 설명("요즘 ~가 달라지고 있어요", "최근 소식인데요")으로 시작하지 마세요. 힘이 없습니다.
+- 이 글에서 **가장 놀랍거나 구체적인 사실 하나를 첫 줄에 바로** 꺼내세요.
+- 나쁜 예: "요즘 유튜브 분위기가 달라지고 있어요" → 좋은 예: "AI로 찍어낸 영상, 이제 수익 내기 어려워진대요"
+- 어그로·과장·경고는 쓰지 않되, 정보 자체의 힘으로 눈길을 끕니다.
+- 첫 줄은 25자 이내로 짧게.
+- 첫 줄에서 약속한 내용은 본문에서 반드시 지킵니다.
 
 [사실성 규칙 — 가장 중요]
 - 위 뉴스의 제목과 요약에 실제로 적힌 내용만 사실로 언급합니다
@@ -251,9 +323,14 @@ def write_post(topics, theme, window, now_kst):
 (예: "여러분은 어떻게 쓰고 계세요?", "이런 기능 써보고 싶으신가요?")
 답하기 부담 없는 질문이어야 합니다.
 
-[가독성 규칙]
+[가독성 규칙 — 줄바꿈이 핵심]
 - 전체 250~350자 (공백 포함)
-- 한 문장은 한 줄에. 한 줄은 10~20자 이내로 짧게 끊습니다
+- **한 줄은 반드시 20자 이내.** 20자가 넘으면 문장 중간이라도 끊어서 줄바꿈하세요.
+  나쁜 예: "인공지능으로 뚝딱 찍어낸 영상은 이제 돈을 벌기 어려워진다는 소식이 들려왔거든요."
+  좋은 예:
+    인공지능으로 뚝딱 찍어낸 영상은
+    이제 돈 벌기 어려워졌대요.
+- 의미가 끊기는 자연스러운 지점에서 줄을 나눕니다 (조사·어미 뒤)
 - 3개 단락 사이에는 빈 줄을 넣어 시각적으로 구분합니다
 - 어려운 용어는 쉬운 말로 바꿔 씁니다 (전문용어를 써야 하면 괄호로 짧게 풀이)
 - 이모지는 글 전체에 딱 1개만 사용
@@ -278,6 +355,7 @@ def write_post(topics, theme, window, now_kst):
     except (KeyError, IndexError):
         raise RuntimeError(f"Gemini 응답 형식 오류: {str(data)[:300]}")
     text = text.strip().strip('"').strip()
+    text = wrap_lines(text, limit=20)  # 줄바꿈 강제 보정
     if len(text) > 495:
         text = text[:492] + "…"
     return text
