@@ -1,0 +1,57 @@
+name: 매일 자동 글 발행
+
+on:
+  schedule:
+    - cron: "0,20,40 22,23 * * *"
+    - cron: "0,20,40 9,10 * * *"
+  workflow_dispatch:
+    inputs:
+      force_window:
+        description: "지금 즉시 테스트 발행 (아침/저녁 스타일 선택)"
+        required: true
+        type: choice
+        options:
+          - morning
+          - evening
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt
+
+      - name: 자동 발행 실행
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FORCE_WINDOW: ${{ inputs.force_window }}
+        run: python auto_post.py
+
+      - name: 발행 기록 저장
+        run: |
+          git config user.name "auto-post-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state/posted.json
+          if ! git diff --cached --quiet; then
+            git commit -m "봇: 발행 기록 업데이트"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push
+          fi
