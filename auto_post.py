@@ -233,6 +233,22 @@ def wrap_lines(text, limit=20):
     return "\n".join(result).strip()
 
 
+def trim_paragraphs(text, max_blocks=4):
+    """단락이 너무 많으면 핵심만 남긴다.
+
+    AI가 분량 지시를 어기고 길게 쓰는 경우를 코드로 보정한다.
+    보존 우선순위: 첫 단락(훅) + 둘째 단락(뉴스 설명)
+                 + 끝에서 둘째(오늘 할 일) + 마지막(질문)
+    중간의 늘어지는 부연 설명 단락을 걷어낸다.
+    """
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+    if len(blocks) <= max_blocks:
+        return "\n\n".join(blocks)
+    head = blocks[:2]                 # 훅 + 무슨 일인지
+    tail = blocks[-(max_blocks - 2):]  # 실행 제안 + 질문
+    return "\n\n".join(head + tail)
+
+
 # ── Gemini로 글 작성 (무료 등급) ─────────────────────────────
 
 def write_post(topics, theme, window, now_kst):
@@ -323,8 +339,13 @@ def write_post(topics, theme, window, now_kst):
 (예: "여러분은 어떻게 쓰고 계세요?", "이런 기능 써보고 싶으신가요?")
 답하기 부담 없는 질문이어야 합니다.
 
+[분량 규칙 — 반드시 지킬 것]
+- 전체 200~280자 (공백 포함). 길면 지루해서 끝까지 안 읽습니다.
+- **단락은 정확히 3개 + 마지막 질문 1줄.** 그 이상 늘리지 마세요.
+- 각 단락은 짧게: 2문장 이내
+- 하고 싶은 말이 더 있어도 과감히 버리세요. 짧고 선명한 글이 더 많이 읽힙니다.
+
 [가독성 규칙 — 줄바꿈이 핵심]
-- 전체 250~350자 (공백 포함)
 - **한 줄은 반드시 20자 이내.** 20자가 넘으면 문장 중간이라도 끊어서 줄바꿈하세요.
   나쁜 예: "인공지능으로 뚝딱 찍어낸 영상은 이제 돈을 벌기 어려워진다는 소식이 들려왔거든요."
   좋은 예:
@@ -340,7 +361,7 @@ def write_post(topics, theme, window, now_kst):
     url = GEMINI_URL.format(model=config.GEMINI_MODEL, key=config.GEMINI_API_KEY)
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 800},
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 420},
     }
     r = requests.post(url, json=body, timeout=60)
     if not r.ok:
@@ -355,7 +376,8 @@ def write_post(topics, theme, window, now_kst):
     except (KeyError, IndexError):
         raise RuntimeError(f"Gemini 응답 형식 오류: {str(data)[:300]}")
     text = text.strip().strip('"').strip()
-    text = wrap_lines(text, limit=20)  # 줄바꿈 강제 보정
+    text = trim_paragraphs(text, max_blocks=4)  # 단락 수 강제 (분량 통제)
+    text = wrap_lines(text, limit=20)           # 줄바꿈 강제 보정
     if len(text) > 495:
         text = text[:492] + "…"
     return text
