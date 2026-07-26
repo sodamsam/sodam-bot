@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
-"""매일 자동 글 발행 봇.
+"""매일 자동 글 발행 봇 (v1.5).
 
 GitHub Actions가 발행 시간대(아침 7~9시 / 저녁 6~8시 KST) 동안 20분마다 실행하고,
 이 스크립트는 날짜별로 정해지는 랜덤 목표 시각이 지났을 때 딱 1회 발행한다.
 
 콘텐츠 파이프라인 (전부 무료):
-  구글 뉴스 RSS(AI/경제) → Gemini 무료 API로 스레드 글 작성 → Threads API 발행
+  구글 뉴스 RSS(제목+요약) → Gemini 무료 API로 스레드 글 작성 → Threads API 발행
 
-주제 규칙:
-  - 아침: 오늘 꼭 알아야 할 AI 뉴스 + 활용 포인트
-  - 저녁: AI 활용법 중심 (화/목요일은 경제뉴스 포함)
+코너 구성 (시리즈성):
+  - 아침: 뉴스 1개를 누구보다 쉽게 풀어주는 "아침 뉴스 해석"
+  - 저녁: 오늘 바로 따라하는 "저녁 실전 활용팁" (화/목은 경제 소식 참고)
+
+품질 원칙:
+  - 뉴스는 딱 1개만 깊게 (산만함 방지 + 계정 태깅 일관성)
+  - 제목/요약에 있는 사실만 언급 (추측 금지)
+  - 부드러운 존댓말, 마지막은 댓글 유도 열린 질문
 """
 import hashlib
 import json
@@ -25,7 +30,7 @@ import threads_api
 KST = datetime.timezone(datetime.timedelta(hours=9))
 POSTED_FILE = os.path.join(os.path.dirname(__file__), "state", "posted.json")
 
-# 발행 시간대 정의 (KST 기준): (이름, 시작시각, 랜덤 오프셋 최대 분)
+# 발행 시간대 정의 (KST 기준)
 WINDOWS = {
     "morning": {"start_hour": 7, "offset_max_min": 100},   # 7:00 ~ 8:40 사이 랜덤
     "evening": {"start_hour": 18, "offset_max_min": 100},  # 18:00 ~ 19:40 사이 랜덤
@@ -35,6 +40,15 @@ GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "{model}:generateContent?key={key}"
 )
+
+# 계정 페르소나 — 모든 글의 기준이 되는 정체성
+PERSONA = """[계정 정체성 — 소담 AI 랩 (@sodam_ai_lab)]
+- AI가 어렵고 낯선 평범한 사람들(왕초보, 직장인, 소상공인, 부업 준비생)을 위한 계정
+- '소담하다'는 이름처럼: 따뜻하고, 담백하고, 과하지 않게
+- 옆에서 차근차근 알려주는 다정한 선생님의 목소리
+- 전문용어를 자랑하지 않고, 누구나 이해할 수 있는 쉬운 말로
+- 항상 "그래서 내가 오늘 뭘 해보면 되는지"까지 알려주는 실용성
+- 독자를 가르치려 들지 않고, 함께 해보자고 권하는 태도"""
 
 # 요일별 콘텐츠 앵글 — 매일 글의 결이 달라지도록 (0=월 ~ 6=일)
 WEEKDAY_ANGLES = {
@@ -49,12 +63,12 @@ WEEKDAY_ANGLES = {
 
 # 첫 줄 후킹 공식 — 부드럽지만 눈길이 가는 패턴들 (날마다 랜덤 지정)
 HOOK_PATTERNS = [
-    '"오늘 눈에 띈 소식 하나 공유해요" 같은 담백한 공유형',
-    '"~해보신 적 있으세요?" 같은 부드러운 질문형',
-    '"저도 이건 몰랐는데요" 같은 공감·경험형',
-    '"~할 때 유용한 방법 3가지" 같은 숫자 정리형',
-    '"요즘 ~가 화제라고 해요" 같은 트렌드 소개형',
-    '"오늘 알아두면 좋은 것 하나" 같은 짧은 정보형',
+    '뉴스의 핵심을 한 문장으로 요약해 던지기 (예: "이제 OO도 AI가 대신한다고 해요")',
+    '독자에게 부드럽게 묻기 (예: "OO 해보신 적 있으세요?")',
+    '몰랐던 사실에 공감하기 (예: "저도 이건 오늘 처음 알았는데요")',
+    '변화의 신호를 짚기 (예: "요즘 OO 쪽 분위기가 달라지고 있어요")',
+    '알아두면 좋은 정보로 시작 (예: "오늘 이건 알아두시면 좋을 것 같아요")',
+    '독자와 관련짓기 (예: "OO 하시는 분들은 눈여겨볼 만한 소식이에요")',
 ]
 
 # ── 상태 관리 ────────────────────────────────────────────────
@@ -70,7 +84,6 @@ def load_posted():
 def save_posted(state):
     os.makedirs(os.path.dirname(POSTED_FILE), exist_ok=True)
     state["used_titles"] = state["used_titles"][-100:]
-    # posted 기록은 최근 30일만 유지
     keys = sorted(state["posted"].keys())[-60:]
     state["posted"] = {k: state["posted"][k] for k in keys}
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
@@ -92,8 +105,8 @@ def current_window(now_kst):
 def target_minute_offset(date_str, window):
     """날짜+시간대별로 고정되는 랜덤 분 오프셋 (0~offset_max).
 
-    해시 기반이라 같은 날 같은 시간대에는 항상 같은 값 → 여러 번 실행돼도
-    목표 시각이 흔들리지 않고, 날마다 발행 시각이 달라져 기계적 패턴을 피한다.
+    같은 날 같은 시간대에는 항상 같은 값 → 여러 번 실행돼도 목표 시각이
+    흔들리지 않고, 날마다 발행 시각이 달라져 기계적 패턴을 피한다.
     """
     seed = hashlib.sha256(f"{date_str}-{window}-sodam".encode()).hexdigest()
     return int(seed, 16) % (WINDOWS[window]["offset_max_min"] + 1)
@@ -147,7 +160,7 @@ def fetch_news(query, limit=6):
 
 
 def collect_topics(window, now_kst, used_titles):
-    """시간대에 맞는 뉴스 제목 목록과 주제 설명을 반환."""
+    """시간대에 맞는 뉴스 목록과 주제 설명을 반환."""
     is_economy_day = now_kst.weekday() in (1, 3)  # 화(1), 목(3)
     ai_news = fetch_news("AI 인공지능 when:1d", 8)
     ai_news = [t for t in ai_news if t["title"] not in used_titles][:4]
@@ -169,7 +182,7 @@ def collect_topics(window, now_kst, used_titles):
 
 def write_post(topics, theme, window, now_kst):
     angle = WEEKDAY_ANGLES.get(now_kst.weekday(), "")
-    # 날짜+시간대 해시로 오늘의 후킹 패턴을 고정 랜덤 선택 (재시도해도 동일)
+    # 날짜+시간대 해시로 오늘의 후킹 패턴을 고정 선택 (재시도해도 동일)
     seed = hashlib.sha256(f"{now_kst.strftime('%Y-%m-%d')}-{window}-hook".encode()).hexdigest()
     hook = HOOK_PATTERNS[int(seed, 16) % len(HOOK_PATTERNS)]
 
@@ -180,7 +193,32 @@ def write_post(topics, theme, window, now_kst):
             line += f"\n  요약: {t['summary']}"
         news_lines.append(line)
 
-    prompt = f"""당신은 한국의 AI 활용 정보 스레드(Threads) 계정 운영자입니다.
+    if window == "morning":
+        corner = """[오늘의 코너: 아침 뉴스 해석]
+아침 글은 "뉴스 1개를 누구보다 쉽게 풀어주는 코너"입니다.
+
+[글의 구조 — 반드시 이 3단으로]
+1단락) 무슨 일이 있었나: 위 뉴스 중 **가장 흥미롭고 독자와 관련 깊은 것 딱 1개만** 골라, 처음 듣는 사람도 이해하게 쉽게 설명
+2단락) 그래서 이게 왜 중요한가: 이 소식이 평범한 개인·소상공인·직장인의 일상과 일에 어떤 의미인지
+3단락) 그럼 뭘 하면 좋은가: 오늘·이번 주에 시도해볼 수 있는 구체적인 행동이나 방향 1가지
+
+여러 뉴스를 한 글에 섞지 않습니다. 딱 1개만 깊게 다룹니다."""
+    else:
+        corner = """[오늘의 코너: 저녁 실전 활용팁]
+저녁 글은 "오늘 바로 따라할 수 있는 AI 활용법 1가지를 알려주는 코너"입니다.
+뉴스는 참고 배경일 뿐, 중심은 실용적인 방법입니다.
+
+[글의 구조 — 반드시 이 3단으로]
+1단락) 이런 상황 있으시죠: 독자가 공감할 만한 일상·업무 속 불편함이나 궁금증 1가지
+2단락) 이렇게 해보세요: AI로 해결하는 구체적인 방법. 어떤 도구에 뭐라고 입력하면 되는지까지 (짧은 예시 문구 포함 가능)
+3단락) 이렇게 하면: 얻게 되는 결과나 절약되는 시간, 한 걸음 더 나아갈 방향
+
+방법은 딱 1가지만, 무료로 누구나 지금 바로 할 수 있는 것으로 제시합니다."""
+
+    prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
+
+{PERSONA}
+
 아래 최신 뉴스(제목+요약)를 참고해서 스레드 게시글 1개를 한국어로 작성하세요.
 
 [오늘의 뉴스]
@@ -190,9 +228,12 @@ def write_post(topics, theme, window, now_kst):
 {theme}
 오늘의 앵글: {angle}
 
+{corner}
+
 [첫 줄]
 첫 줄은 이 패턴으로 부드럽게 시작: {hook}
-눈길은 끌되, 경고·명령·자극적인 표현은 쓰지 않습니다.
+첫 줄은 스크롤을 멈추게 하는 가장 중요한 한 줄입니다. 숫자·의외성·질문 중 하나를 자연스럽게 담되, 경고·명령·자극적인 표현은 쓰지 않습니다.
+첫 줄에서 약속한 내용은 본문에서 반드시 지킵니다.
 
 [사실성 규칙 — 가장 중요]
 - 위 뉴스의 제목과 요약에 실제로 적힌 내용만 사실로 언급합니다
@@ -202,15 +243,23 @@ def write_post(topics, theme, window, now_kst):
 
 [어조 규칙]
 - 부드럽고 친근한 존댓말, 옆에서 알려주는 느낌
-- 명령("~하세요 절대"), 경고, 단정, 과장, 어그로 표현 금지
+- 명령, 경고, 단정, 과장, 어그로 표현 금지
 - 강요하지 않고 제안하는 톤 ("~해보시는 것도 좋아요")
 
-[형식 규칙]
-- 뉴스 중 1~2개만 골라 핵심을 쉽게 풀고, 독자가 오늘 바로 써먹을 수 있는 활용 팁이나 시사점 1개 포함
-- 전체 250~350자 (공백 포함), 문장은 짧게 끊기
-- 한 줄은 10~20자 이내로 짧게, 자주 줄바꿈해서 모바일에서 리듬감 있게 읽히도록
-- 이모지는 딱 1개, 해시태그·링크·인사말 금지
+[마무리 — 댓글 유도]
+글의 마지막은 독자에게 묻는 가볍고 짧은 열린 질문 1개로 끝냅니다.
+(예: "여러분은 어떻게 쓰고 계세요?", "이런 기능 써보고 싶으신가요?")
+답하기 부담 없는 질문이어야 합니다.
+
+[가독성 규칙]
+- 전체 250~350자 (공백 포함)
+- 한 문장은 한 줄에. 한 줄은 10~20자 이내로 짧게 끊습니다
+- 3개 단락 사이에는 빈 줄을 넣어 시각적으로 구분합니다
+- 어려운 용어는 쉬운 말로 바꿔 씁니다 (전문용어를 써야 하면 괄호로 짧게 풀이)
+- 이모지는 글 전체에 딱 1개만 사용
+- 해시태그·링크·인사말("안녕하세요" 등) 금지
 - 게시글 본문만 출력 (설명·따옴표 없이)"""
+
     url = GEMINI_URL.format(model=config.GEMINI_MODEL, key=config.GEMINI_API_KEY)
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -218,7 +267,11 @@ def write_post(topics, theme, window, now_kst):
     }
     r = requests.post(url, json=body, timeout=60)
     if not r.ok:
-        raise RuntimeError(f"Gemini 호출 실패: {r.status_code} {r.text[:300]}")
+        raise RuntimeError(
+            f"Gemini 호출 실패: {r.status_code} {r.text[:300]}\n"
+            f"[점검] 404면 GEMINI_MODEL 값이 현재 유효한 모델명인지, "
+            f"429면 무료 한도 초과가 아닌지 확인하세요. (현재 모델: {config.GEMINI_MODEL})"
+        )
     data = r.json()
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
