@@ -47,14 +47,14 @@ WEEKDAY_ANGLES = {
     6: "다음 주를 준비하는 관점에서 AI 트렌드 한 가지",
 }
 
-# 첫 줄 후킹 공식 — 스크롤을 멈추게 하는 검증된 패턴들 (날마다 랜덤 지정)
+# 첫 줄 후킹 공식 — 부드럽지만 눈길이 가는 패턴들 (날마다 랜덤 지정)
 HOOK_PATTERNS = [
-    '"절대 ~하지 마세요"로 시작하는 경고형',
-    '"제발 이것만은 해보세요"류의 간곡한 권유형',
-    '"~해야 하는 이유 3가지"처럼 숫자를 내세운 넘버링형',
-    '"소신발언 하나 하겠습니다"로 시작하는 소신발언형',
-    '"아직도 ~하고 계세요?"처럼 찔리게 만드는 질문형',
-    '"오늘 이 소식 모르면 손해예요"류의 정보 격차 자극형',
+    '"오늘 눈에 띈 소식 하나 공유해요" 같은 담백한 공유형',
+    '"~해보신 적 있으세요?" 같은 부드러운 질문형',
+    '"저도 이건 몰랐는데요" 같은 공감·경험형',
+    '"~할 때 유용한 방법 3가지" 같은 숫자 정리형',
+    '"요즘 ~가 화제라고 해요" 같은 트렌드 소개형',
+    '"오늘 알아두면 좋은 것 하나" 같은 짧은 정보형',
 ]
 
 # ── 상태 관리 ────────────────────────────────────────────────
@@ -114,7 +114,15 @@ def should_post_now(now_kst, window, state):
 
 # ── 뉴스 수집 (구글 뉴스 RSS, 무료·키 불필요) ────────────────
 
+def _strip_html(text):
+    return re.sub(r"<[^>]+>", " ", text or "").strip()
+
+
 def fetch_news(query, limit=6):
+    """구글 뉴스 RSS에서 (제목 + 기사 요약) 목록을 가져온다.
+
+    요약까지 함께 전달해 AI가 제목만 보고 내용을 추측하는 일을 줄인다.
+    """
     url = (
         "https://news.google.com/rss/search?q="
         + requests.utils.quote(query)
@@ -131,7 +139,8 @@ def fetch_news(query, limit=6):
             if (now - pub_dt).total_seconds() > 60 * 60 * 36:  # 36시간 이내만
                 continue
         if title:
-            items.append(title)
+            summary = _strip_html(e.get("summary", ""))[:200]
+            items.append({"title": title, "summary": summary})
         if len(items) >= limit:
             break
     return items
@@ -141,12 +150,12 @@ def collect_topics(window, now_kst, used_titles):
     """시간대에 맞는 뉴스 제목 목록과 주제 설명을 반환."""
     is_economy_day = now_kst.weekday() in (1, 3)  # 화(1), 목(3)
     ai_news = fetch_news("AI 인공지능 when:1d", 8)
-    ai_news = [t for t in ai_news if t not in used_titles][:4]
+    ai_news = [t for t in ai_news if t["title"] not in used_titles][:4]
 
     topics = list(ai_news)
     if window == "evening" and is_economy_day:
         econ = fetch_news("경제 금리 증시 when:1d", 6)
-        econ = [t for t in econ if t not in used_titles][:2]
+        econ = [t for t in econ if t["title"] not in used_titles][:2]
         topics += econ
         theme = "AI 활용법 + 오늘의 경제 소식"
     elif window == "morning":
@@ -164,31 +173,48 @@ def write_post(topics, theme, window, now_kst):
     seed = hashlib.sha256(f"{now_kst.strftime('%Y-%m-%d')}-{window}-hook".encode()).hexdigest()
     hook = HOOK_PATTERNS[int(seed, 16) % len(HOOK_PATTERNS)]
 
-    prompt = f"""당신은 한국의 AI 활용 정보 스레드(Threads) 계정 운영자입니다.
-아래 최신 뉴스 제목들을 참고해서 스레드 게시글 1개를 한국어로 작성하세요.
+    news_lines = []
+    for t in topics:
+        line = f"- 제목: {t['title']}"
+        if t.get("summary"):
+            line += f"\n  요약: {t['summary']}"
+        news_lines.append(line)
 
-[오늘의 뉴스 제목들]
-{chr(10).join('- ' + t for t in topics) if topics else '- (뉴스 없음: 일반 AI 활용 팁으로 작성)'}
+    prompt = f"""당신은 한국의 AI 활용 정보 스레드(Threads) 계정 운영자입니다.
+아래 최신 뉴스(제목+요약)를 참고해서 스레드 게시글 1개를 한국어로 작성하세요.
+
+[오늘의 뉴스]
+{chr(10).join(news_lines) if news_lines else '- (뉴스 없음: 일반 AI 활용 팁으로 작성)'}
 
 [주제 방향]
 {theme}
 오늘의 앵글: {angle}
 
-[첫 줄 후킹 — 가장 중요]
-첫 줄은 반드시 이 패턴으로: {hook}
-스레드는 첫 줄에서 스크롤이 멈추느냐로 승부가 납니다. 첫 줄만 읽어도 계속 읽고 싶어야 합니다.
+[첫 줄]
+첫 줄은 이 패턴으로 부드럽게 시작: {hook}
+눈길은 끌되, 경고·명령·자극적인 표현은 쓰지 않습니다.
 
-[작성 규칙]
-- 뉴스 중 1~2개만 골라 핵심을 쉽게 풀고, 독자가 오늘 바로 써먹을 수 있는 활용 팁이나 시사점 1개를 반드시 포함
+[사실성 규칙 — 가장 중요]
+- 위 뉴스의 제목과 요약에 실제로 적힌 내용만 사실로 언급합니다
+- 제목/요약에 없는 수치, 날짜, 발표 내용, 세부 사항을 추측해서 쓰지 않습니다
+- 확신할 수 없는 부분은 "~라고 해요", "~라는 소식이에요"처럼 전달하는 어조로 씁니다
+- 뉴스 내용이 불충분하면 뉴스 언급을 줄이고 일반적인 AI 활용 팁 중심으로 작성합니다
+
+[어조 규칙]
+- 부드럽고 친근한 존댓말, 옆에서 알려주는 느낌
+- 명령("~하세요 절대"), 경고, 단정, 과장, 어그로 표현 금지
+- 강요하지 않고 제안하는 톤 ("~해보시는 것도 좋아요")
+
+[형식 규칙]
+- 뉴스 중 1~2개만 골라 핵심을 쉽게 풀고, 독자가 오늘 바로 써먹을 수 있는 활용 팁이나 시사점 1개 포함
 - 전체 250~350자 (공백 포함), 문장은 짧게 끊기
 - 한 줄은 10~20자 이내로 짧게, 자주 줄바꿈해서 모바일에서 리듬감 있게 읽히도록
-- 존댓말, 이모지는 딱 1개, 해시태그·링크·인사말 금지
-- 과장/어그로 금지, 담백하고 신뢰감 있는 톤 (후킹은 첫 줄로 충분)
+- 이모지는 딱 1개, 해시태그·링크·인사말 금지
 - 게시글 본문만 출력 (설명·따옴표 없이)"""
     url = GEMINI_URL.format(model=config.GEMINI_MODEL, key=config.GEMINI_API_KEY)
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.9, "maxOutputTokens": 800},
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 800},
     }
     r = requests.post(url, json=body, timeout=60)
     if not r.ok:
@@ -234,7 +260,7 @@ def main():
             return
 
     topics, theme = collect_topics(window, now_kst, state["used_titles"])
-    print(f"[뉴스] {len(topics)}건 수집: {topics[:3]} ...")
+    print(f"[뉴스] {len(topics)}건 수집: {[t['title'] for t in topics[:3]]} ...")
 
     text = write_post(topics, theme, window, now_kst)
     print(f"[초안] {text[:80]}...")
@@ -243,7 +269,7 @@ def main():
     print(f"[발행 완료] post id: {post_id}")
 
     state["posted"][key] = {"time": now_kst.isoformat(), "post_id": post_id}
-    state["used_titles"] += topics
+    state["used_titles"] += [t["title"] for t in topics]
     save_posted(state)
 
 
