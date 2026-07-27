@@ -2,15 +2,18 @@ name: 매일 자동 글 발행
 
 on:
   schedule:
-    - cron: "0,20,40 22,23 * * *"
-    - cron: "0,20,40 9,10 * * *"
+    # KST 아침 7~8시 = UTC 22시(전날), 20분 간격으로 확인
+    - cron: "0,20,40 22 * * *"
+    # KST 저녁 19~20시 = UTC 10시, 20분 간격으로 확인
+    - cron: "0,20,40 10 * * *"
   workflow_dispatch:
     inputs:
       force_window:
-        description: "지금 즉시 테스트 발행 (아침/저녁 스타일 선택)"
-        required: true
+        description: "비워두면 평소처럼 랜덤 목표 시각 판단, 값을 넣으면 즉시 강제 발행"
+        required: false
         type: choice
         options:
+          - ""
           - morning
           - evening
 
@@ -49,3 +52,10 @@ jobs:
       - name: 발행 기록 저장
         run: |
           git config user.name "auto-post-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state/posted.json
+          if ! git diff --cached --quiet; then
+            git commit -m "봇: 발행 기록 업데이트"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push
+          fi
