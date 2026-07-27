@@ -14,7 +14,7 @@ GitHub Actions가 발행 시간대(아침 7~9시 / 저녁 6~8시 KST) 동안 20�
 품질 원칙:
   - 뉴스는 딱 1개만 깊게 (산만함 방지 + 계정 태깅 일관성)
   - 제목/요약에 있는 사실만 언급 (추측 금지)
-  - 부드러운 존댓말, 마지막은 댓글 유도 열린 질문
+  - 부드러운 존댓말, 정보 제시 후 활용법으로 마무리 (질문 유도 없음)
 """
 import hashlib
 import json
@@ -160,11 +160,51 @@ def fetch_news(query, limit=6):
     return items
 
 
+# 검색어 뱅크 — 매일 다른 조합으로 검색해 후보군을 넓히고 특정 소재 반복을 피한다
+NEWS_QUERIES = [
+    "AI 서비스 출시 when:1d",
+    "AI 신기능 업데이트 when:1d",
+    "챗GPT 활용 when:1d",
+    "생성형 AI 트렌드 when:1d",
+    "AI 스타트업 when:2d",
+    "인공지능 규제 정책 when:2d",
+    "AI 기업 도입 사례 when:2d",
+]
+
+
+def _pick_queries(date_str, window, n=3):
+    """날짜+시간대 해시로 오늘 사용할 검색어 조합을 고정 선택 (매일 다르게)."""
+    seed = int(hashlib.sha256(f"{date_str}-{window}-queries".encode()).hexdigest(), 16)
+    pool = list(NEWS_QUERIES)
+    picked = []
+    for i in range(n):
+        idx = (seed >> (i * 8)) % len(pool)
+        picked.append(pool.pop(idx))
+    return picked
+
+
 def collect_topics(window, now_kst, used_titles):
-    """시간대에 맞는 뉴스 목록과 주제 설명을 반환."""
+    """시간대에 맞는 뉴스 목록과 주제 설명을 반환.
+
+    검색어를 매일 다르게 조합해 특정 소재(예: 지자체 AI 교육)가
+    계속 반복 노출되는 것을 피한다.
+    """
     is_economy_day = now_kst.weekday() in (1, 3)  # 화(1), 목(3)
-    ai_news = fetch_news("AI 인공지능 when:1d", 8)
-    ai_news = [t for t in ai_news if t["title"] not in used_titles][:4]
+    date_str = now_kst.strftime("%Y-%m-%d")
+    queries = _pick_queries(date_str, window, n=3)
+
+    ai_news = []
+    for q in queries:
+        ai_news += fetch_news(q, 4)
+    # 같은 회차에 중복 제목 제거 + 최근 사용한 제목 제외
+    seen = set()
+    dedup = []
+    for t in ai_news:
+        if t["title"] in seen or t["title"] in used_titles:
+            continue
+        seen.add(t["title"])
+        dedup.append(t)
+    ai_news = dedup[:6]
 
     topics = list(ai_news)
     if window == "evening" and is_economy_day:
@@ -238,14 +278,14 @@ def trim_paragraphs(text, max_blocks=4):
 
     AI가 분량 지시를 어기고 길게 쓰는 경우를 코드로 보정한다.
     보존 우선순위: 첫 단락(훅) + 둘째 단락(뉴스 설명)
-                 + 끝에서 둘째(오늘 할 일) + 마지막(질문)
+                 + 마지막 단락들(활용법 제시, 계정 각인 문구 등)
     중간의 늘어지는 부연 설명 단락을 걷어낸다.
     """
     blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
     if len(blocks) <= max_blocks:
         return "\n\n".join(blocks)
     head = blocks[:2]                 # 훅 + 무슨 일인지
-    tail = blocks[-(max_blocks - 2):]  # 실행 제안 + 질문
+    tail = blocks[-(max_blocks - 2):]  # 실행 제안(+계정 각인 문구)
     return "\n\n".join(head + tail)
 
 
@@ -268,7 +308,7 @@ def write_post(topics, theme, window, now_kst):
     show_identity = (window == "morning" and now_kst.weekday() in (0, 4))
     identity_rule = ("""
 [계정 각인 — 오늘은 넣습니다]
-마지막 질문 바로 앞에, 이 계정이 무엇을 하는 곳인지 알려주는 짧은 한 줄을 자연스럽게 넣으세요.
+글의 맨 마지막(3단락 뒤)에, 이 계정이 무엇을 하는 곳인지 알려주는 짧은 한 줄을 자연스럽게 넣으세요.
 광고처럼 들리지 않게, 담백하게 한 줄이면 충분합니다.
 (예: "AI 어렵지 않게 풀어드리는 이야기, 계속 올릴게요")
 "팔로우 해주세요" 같은 직접적인 요청은 쓰지 않습니다.
@@ -276,25 +316,27 @@ def write_post(topics, theme, window, now_kst):
 
     if window == "morning":
         corner = """[오늘의 코너: 아침 뉴스 해석]
-아침 글은 "뉴스 1개를 누구보다 쉽게 풀어주는 코너"입니다.
+아침 글은 "뉴스 1개를 누구보다 쉽게 풀어주고, 그걸 어떻게 써먹을지까지 알려주는 코너"입니다.
 
-[글의 구조 — 반드시 이 3단으로]
+[글의 구조 — 반드시 이 3단으로, 질문 없이 정보로 끝냅니다]
 1단락) 무슨 일이 있었나: 위 뉴스 중 **가장 흥미롭고 독자와 관련 깊은 것 딱 1개만** 골라, 처음 듣는 사람도 이해하게 쉽게 설명
 2단락) 그래서 이게 왜 중요한가: 이 소식이 평범한 개인·소상공인·직장인의 일상과 일에 어떤 의미인지
-3단락) 그럼 뭘 하면 좋은가: 오늘·이번 주에 시도해볼 수 있는 구체적인 행동이나 방향 1가지
+3단락) 그래서 이걸 어떻게 써먹으면 좋은가: 이 소식과 관련해서 독자가 오늘·이번 주에 바로 활용할 수 있는 구체적인 방법 (도구/서비스 이름, 실제로 어떻게 시작하면 되는지)
 
-여러 뉴스를 한 글에 섞지 않습니다. 딱 1개만 깊게 다룹니다."""
+여러 뉴스를 한 글에 섞지 않습니다. 딱 1개만 깊게 다룹니다.
+3단락이 이 글의 결론이자 마무리입니다. 질문으로 끝내지 않습니다."""
     else:
         corner = """[오늘의 코너: 저녁 실전 활용팁]
 저녁 글은 "오늘 바로 따라할 수 있는 AI 활용법 1가지를 알려주는 코너"입니다.
 뉴스는 참고 배경일 뿐, 중심은 실용적인 방법입니다.
 
-[글의 구조 — 반드시 이 3단으로]
+[글의 구조 — 반드시 이 3단으로, 질문 없이 정보로 끝냅니다]
 1단락) 이런 상황 있으시죠: 독자가 공감할 만한 일상·업무 속 불편함이나 궁금증 1가지
 2단락) 이렇게 해보세요: AI로 해결하는 구체적인 방법. 어떤 도구에 뭐라고 입력하면 되는지까지 (짧은 예시 문구 포함 가능)
-3단락) 이렇게 하면: 얻게 되는 결과나 절약되는 시간, 한 걸음 더 나아갈 방향
+3단락) 이렇게 하면: 얻게 되는 결과나 절약되는 시간 — 이 글의 결론이자 마무리
 
-방법은 딱 1가지만, 무료로 누구나 지금 바로 할 수 있는 것으로 제시합니다."""
+방법은 딱 1가지만, 무료로 누구나 지금 바로 할 수 있는 것으로 제시합니다.
+질문으로 끝내지 않습니다."""
 
     prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
 
@@ -334,14 +376,13 @@ def write_post(topics, theme, window, now_kst):
 - 명령, 경고, 단정, 과장, 어그로 표현 금지
 - 강요하지 않고 제안하는 톤 ("~해보시는 것도 좋아요")
 
-[마무리 — 댓글 유도]
-글의 마지막은 독자에게 묻는 가볍고 짧은 열린 질문 1개로 끝냅니다.
-(예: "여러분은 어떻게 쓰고 계세요?", "이런 기능 써보고 싶으신가요?")
-답하기 부담 없는 질문이어야 합니다.
+[마무리]
+글은 질문 없이, 3단락의 정보/활용법 제시로 자연스럽게 끝납니다.
+"~해보세요", "~하시면 좋아요"처럼 담백한 제안으로 마무리합니다.
 
 [분량 규칙 — 반드시 지킬 것]
 - 전체 200~280자 (공백 포함). 길면 지루해서 끝까지 안 읽습니다.
-- **단락은 정확히 3개 + 마지막 질문 1줄.** 그 이상 늘리지 마세요.
+- **단락은 정확히 3개.** 그 이상 늘리지 마세요.
 - 각 단락은 짧게: 2문장 이내
 - 하고 싶은 말이 더 있어도 과감히 버리세요. 짧고 선명한 글이 더 많이 읽힙니다.
 
