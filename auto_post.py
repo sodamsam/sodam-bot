@@ -32,8 +32,8 @@ POSTED_FILE = os.path.join(os.path.dirname(__file__), "state", "posted.json")
 
 # 발행 시간대 정의 (KST 기준)
 WINDOWS = {
-    "morning": {"start_hour": 7, "offset_max_min": 100},   # 7:00 ~ 8:40 사이 랜덤
-    "evening": {"start_hour": 18, "offset_max_min": 100},  # 18:00 ~ 19:40 사이 랜덤
+    "morning": {"start_hour": 7, "offset_max_min": 59},   # 7:00 ~ 7:59 사이 랜덤
+    "evening": {"start_hour": 19, "offset_max_min": 59},  # 19:00 ~ 19:59 사이 랜덤
 }
 
 GEMINI_URL = (
@@ -96,9 +96,9 @@ def save_posted(state):
 def current_window(now_kst):
     """지금이 어느 발행 시간대인지 반환 (아니면 None)."""
     h = now_kst.hour
-    if 7 <= h < 9:
+    if h == 7:
         return "morning"
-    if 18 <= h < 20:
+    if h == 19:
         return "evening"
     return None
 
