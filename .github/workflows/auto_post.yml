@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       force_window:
-        description: "비워두면 평소처럼 랜덤 목표 시각 판단, 값을 넣으면 즉시 강제 발행"
+        description: "비워두면 평소처럼 시간대 범위 판단, 값을 넣으면 즉시 강제 발행"
         required: false
         type: choice
         options:
@@ -44,6 +44,7 @@ jobs:
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_EVENING_DB_ID: ${{ secrets.NOTION_EVENING_DB_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           FORCE_WINDOW: ${{ inputs.force_window }}
