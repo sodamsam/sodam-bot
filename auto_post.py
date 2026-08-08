@@ -1,30 +1,30 @@
 # -*- coding: utf-8 -*-
-"""매일 자동 글 발행 봇 (v1.6).
+"""매일 자동 글 발행 봇 (v2.0).
 
-GitHub Actions가 발행 시간대(아침 7시대 / 저녁 19시대 KST) 동안 20분마다 실행하고,
-이 스크립트는 그 시간대 범위 안에 들어와 있으면(랜덤 목표 시각을 기다리지 않고)
-아직 오늘 발행 안 했을 때 바로 1회 발행한다. 아침/저녁 모두 동일한 방식.
+GitHub Actions가 1순위 시간대(07~09시 KST) 동안 20분마다 실행하고,
+그 시간대에 아직 오늘 발행 안 했다면 바로 1회 발행한다.
+1순위 시간대를 놓치면(cron 누락 등) 2순위 시간대(18~20시 KST)에 발행한다.
+하루 발행은 1회로 제한한다(날짜 기준 판단).
 
 콘텐츠 파이프라인 (전부 무료):
-  - 아침: 구글 뉴스 RSS(사건 중심 키워드) → Gemini 무료 API로 스레드 글 작성
-  - 저녁: 노션 "저녁 소재 노트" DB의 실제 경험 메모를 우선 사용
-          (미사용 메모가 없으면 아침처럼 뉴스 기반 자동 생성으로 대체 발행)
-  → Threads API 발행
+  - 매 실행마다 정부·지자체 AI 지원 혜택 소재를 먼저 검사한다.
+    신선도 점수 3점 이상 + 신청 방법 확인 + 환각 검증을 통과하면 그 날은 혜택 글을 발행한다.
+  - 통과하는 혜택 소재가 없으면 순환 큐(POST_CYCLE)를 따라
+    "프롬프트 나눔"(주력) 또는 "업무 활용법" 글을 발행한다.
+  → Gemini 무료 API로 초안 작성 → Threads API 발행
 
-코너 구성 (시리즈성):
-  - 아침 "밤사이 AI 소식": 밤사이~오늘 있었던 AI 소식 1개를 쉽게 풀어주는 코너
-  - 저녁 "AI로 이렇게 바뀌었어요": 노션에 적어둔 실제 AI 활용 경험을 후킹형 글로 다듬는 코너
-    (반자동 — 노션에 쓸 미사용 메모가 없을 때만 뉴스 기반 "저녁 실전 활용팁"으로 대체)
+프롬프트 나눔 글은 본문에 프롬프트 1개, 발행한 글에 댓글로 2개를 더 이어 붙인다.
 
 품질 원칙:
-  - 뉴스/메모는 딱 1개만 깊게 (산만함 방지 + 계정 태깅 일관성)
-  - 뉴스 제목/요약, 노션 메모에 실제로 있는 사실만 언급 (추측 금지)
+  - 혜택 글은 기사에 실제로 적힌 사실만 언급 (숫자·기관명·전화번호 환각 방어 2단 적용)
+  - 모든 글 마지막 줄에 담백한 팔로우 이유 한 줄을 넣어 전환율을 높인다
   - 부드러운 존댓말, 4050 독자 눈높이에 맞춘 쉬운 말
 """
 import hashlib
 import json
 import os
 import re
+import time
 import datetime
 import requests
 import feedparser
@@ -36,11 +36,9 @@ import threads_api
 KST = datetime.timezone(datetime.timedelta(hours=9))
 POSTED_FILE = os.path.join(os.path.dirname(__file__), "state", "posted.json")
 
-# 발행 시간대 정의 (KST 기준): 이 시(hour) 범위 안이면 즉시 발행 대상
-WINDOWS = {
-    "morning": {"hour": 7},   # 07:00 ~ 07:59
-    "evening": {"hour": 19},  # 19:00 ~ 19:59
-}
+# 발행 시간대 정의 (KST 기준)
+PRIMARY_HOURS = (7, 8, 9)      # 07:00 ~ 09:59
+BACKUP_HOURS = (18, 19, 20)    # 18:00 ~ 20:59
 
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -49,26 +47,19 @@ GEMINI_URL = (
 
 # 계정 페르소나 — 모든 글의 기준이 되는 정체성
 PERSONA = """[계정 정체성 — 소담 AI 랩 (@sodam_ai_lab)]
-- AI가 어렵고 낯선 평범한 사람들(왕초보, 직장인, 소상공인, 부업 준비생)을 위한 계정
+- 컴퓨터와 스마트폰이 익숙하지 않은 40~50대가 주 대상
+  (직장인, 소상공인, 부업 준비생, 집안일하며 배우고 싶은 사람)
+- 이들이 "나도 할 수 있겠다"고 느끼게 만드는 것이 이 계정의 목적
 - '소담하다'는 이름처럼: 따뜻하고, 담백하고, 과하지 않게
 - 옆에서 차근차근 알려주는 다정한 선생님의 목소리
 - 전문용어를 자랑하지 않고, 누구나 이해할 수 있는 쉬운 말로
 - 항상 "그래서 내가 오늘 뭘 해보면 되는지"까지 알려주는 실용성
 - 독자를 가르치려 들지 않고, 함께 해보자고 권하는 태도"""
 
-# 요일별 콘텐츠 앵글 — 매일 글의 결이 달라지도록 (0=월 ~ 6=일)
-WEEKDAY_ANGLES = {
-    0: "한 주를 시작하며 이번 주 주목할 AI 흐름 짚어주기",
-    1: "직장인·자영업자가 업무에 바로 쓰는 AI 활용팁",
-    2: "구체적인 AI 도구/기능 하나를 골라 실전 사용법 소개",
-    3: "AI 쓸 때 흔히 하는 실수·주의사항 짚어주기",
-    4: "이번 주 AI 소식 중 놓치면 아까운 것 정리",
-    5: "주말에 가볍게 시도해볼 만한 AI 활용 아이디어",
-    6: "다음 주를 준비하는 관점에서 AI 트렌드 한 가지",
-}
+# 7일 주기 순환 큐 — 요일에 고정하지 않아 발행이 누락돼도 순서만 밀리고 깨지지 않는다.
+POST_CYCLE = ["prompt", "prompt", "howto", "prompt", "prompt", "howto", "prompt"]
 
 # 첫 줄 공식 — 어그로 없이 '정보의 힘'으로 스크롤을 멈추게 하는 패턴 (날마다 랜덤)
-# 공통 원칙: 배경 설명으로 시작하지 말고, 가장 놀랍고 구체적인 사실을 첫 줄에 바로 꺼낸다.
 HOOK_PATTERNS = [
     '가장 놀라운 사실을 그대로 첫 줄에 (예: "AI로 찍어낸 영상, 이제 수익 내기 어려워진대요")',
     '변화의 결과를 먼저 (예: "이제 OO는 무료로 할 수 있게 됐어요")',
@@ -83,9 +74,14 @@ HOOK_PATTERNS = [
 def load_posted():
     try:
         with open(POSTED_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"posted": {}, "used_titles": []}
+        data = {}
+    data.setdefault("posted", {})
+    data.setdefault("used_titles", [])
+    data.setdefault("cycle_index", 0)
+    data.setdefault("prompt_seq", 0)
+    return data
 
 
 def save_posted(state):
@@ -98,29 +94,23 @@ def save_posted(state):
 
 
 # ── 시간 판단 ────────────────────────────────────────────────
-#
-# 아침/저녁 모두 동일한 방식: 해당 시(hour) 범위 안에 들어와 있고
-# 오늘 아직 발행하지 않았다면, 랜덤 목표 시각을 기다리지 않고 바로 발행한다.
-# (예전에는 날짜별 랜덤 분(分) 오프셋만큼 기다렸다가 발행했지만, 그 방식은 폐기했다.)
 
 def current_window(now_kst):
     """지금이 어느 발행 시간대인지 반환 (아니면 None)."""
     h = now_kst.hour
-    if h == WINDOWS["morning"]["hour"]:
-        return "morning"
-    if h == WINDOWS["evening"]["hour"]:
-        return "evening"
+    if h in PRIMARY_HOURS:
+        return "primary"
+    if h in BACKUP_HOURS:
+        return "backup"
     return None
 
 
-def should_post_now(now_kst, window, state):
-    """오늘 이 시간대에 아직 발행 안 했으면 True — 범위 안이면 즉시 발행."""
+def should_post_now(now_kst, state):
+    """오늘 이미 발행했으면 False — 날짜만으로 판단(1순위/2순위 구분 없이 하루 1회)."""
     date_str = now_kst.strftime("%Y-%m-%d")
-    key = f"{date_str}-{window}"
-    if key in state["posted"]:
-        return False, key, "이미 발행함"
-    hour = WINDOWS[window]["hour"]
-    return True, key, f"발행 시간대({hour:02d}시대) 진입 — 즉시 발행"
+    if date_str in state["posted"]:
+        return False, date_str, "오늘 이미 발행함"
+    return True, date_str, "발행 시간대 진입 — 즉시 발행"
 
 
 # ── 뉴스 수집 (구글 뉴스 RSS, 무료·키 불필요) ────────────────
@@ -130,10 +120,7 @@ def _strip_html(text):
 
 
 def fetch_news(query, limit=6):
-    """구글 뉴스 RSS에서 (제목 + 기사 요약) 목록을 가져온다.
-
-    요약까지 함께 전달해 AI가 제목만 보고 내용을 추측하는 일을 줄인다.
-    """
+    """구글 뉴스 RSS에서 (제목 + 기사 요약) 목록을 가져온다. 30시간 이내 기사만."""
     url = (
         "https://news.google.com/rss/search?q="
         + requests.utils.quote(query)
@@ -145,33 +132,24 @@ def fetch_news(query, limit=6):
     for e in feed.entries[: limit * 3]:
         title = re.sub(r"\s*-\s*[^-]+$", "", e.get("title", "")).strip()  # 끝의 언론사명 제거
         published = e.get("published_parsed")
+        pub_ts = None
         if published:
             pub_dt = datetime.datetime(*published[:6], tzinfo=datetime.timezone.utc)
-            if (now - pub_dt).total_seconds() > 60 * 60 * 36:  # 36시간 이내만
+            pub_ts = pub_dt.timestamp()
+            if (now - pub_dt).total_seconds() > 60 * 60 * 30:  # 30시간 이내만
                 continue
         if title:
             summary = _strip_html(e.get("summary", ""))[:200]
-            items.append({"title": title, "summary": summary})
+            items.append({"title": title, "summary": summary, "published_ts": pub_ts})
         if len(items) >= limit:
             break
     return items
 
 
-# 검색어 뱅크 — "밤사이 AI 소식" 코너 기준, 트렌드어 대신 사건 중심 키워드로 구성
-# (정책/출시/규제/지원/빅테크 발표처럼 "무슨 일이 있었는지"가 분명한 소식 위주)
-NEWS_QUERIES = [
-    "AI 정책 발표 when:1d",
-    "AI 서비스 출시 when:1d",
-    "AI 규제 when:2d",
-    "정부 AI 지원 when:2d",
-    "빅테크 AI 업데이트 when:1d",
-]
-
-
-def _pick_queries(date_str, window, n=3):
-    """날짜+시간대 해시로 오늘 사용할 검색어 조합을 고정 선택 (매일 다르게, 재시도해도 동일)."""
-    seed = int(hashlib.sha256(f"{date_str}-{window}-queries".encode()).hexdigest(), 16)
-    pool = list(NEWS_QUERIES)
+def _pick_queries(date_str, tag, pool, n):
+    """날짜+태그 해시로 오늘 사용할 검색어 조합을 고정 선택 (매일 다르게, 재시도해도 동일)."""
+    seed = int(hashlib.sha256(f"{date_str}-{tag}-queries".encode()).hexdigest(), 16)
+    pool = list(pool)
     picked = []
     for i in range(min(n, len(pool))):
         idx = (seed >> (i * 8)) % len(pool)
@@ -179,54 +157,13 @@ def _pick_queries(date_str, window, n=3):
     return picked
 
 
-def collect_topics(window, now_kst, used_titles):
-    """시간대에 맞는 뉴스 목록과 주제 설명을 반환.
-
-    검색어를 매일 다르게 조합해 특정 소재가 계속 반복 노출되는 것을 피한다.
-    """
-    is_economy_day = now_kst.weekday() in (1, 3)  # 화(1), 목(3)
-    date_str = now_kst.strftime("%Y-%m-%d")
-    queries = _pick_queries(date_str, window, n=3)
-
-    ai_news = []
-    for q in queries:
-        ai_news += fetch_news(q, 4)
-    # 같은 회차에 중복 제목 제거 + 최근 사용한 제목 제외
-    seen = set()
-    dedup = []
-    for t in ai_news:
-        if t["title"] in seen or t["title"] in used_titles:
-            continue
-        seen.add(t["title"])
-        dedup.append(t)
-    ai_news = dedup[:6]
-
-    topics = list(ai_news)
-    if window == "evening" and is_economy_day:
-        econ = fetch_news("경제 금리 증시 when:1d", 6)
-        econ = [t for t in econ if t["title"] not in used_titles][:2]
-        topics += econ
-        theme = "AI 활용법 + 오늘의 경제 소식"
-    elif window == "morning":
-        theme = "밤사이 있었던 AI 소식과 4050에게 중요한 이유"
-    else:
-        theme = "일상·업무에 바로 쓰는 AI 활용법 (노션에 쓸 실제 경험 메모가 없을 때의 대체 발행)"
-    return topics, theme
-
-
 # ── 줄바꿈 후처리 (AI가 지시를 안 지켜도 코드로 보정) ────────
 
-# 문장을 끊기 좋은 구두점 (이 뒤에서 우선적으로 줄을 나눈다)
 BREAK_MARKS = ("。", ".", "!", "?", ",", "~")
 
 
 def wrap_lines(text, limit=20):
-    """한 줄이 limit자를 넘으면 어절(띄어쓰기) 단위로 자연스럽게 끊어 준다.
-
-    - 단어 중간에서는 절대 끊지 않는다
-    - 구두점(. , ? !) 뒤에서 끊는 것을 우선한다
-    - 빈 줄(단락 구분)은 그대로 보존한다
-    """
+    """한 줄이 limit자를 넘으면 어절(띄어쓰기) 단위로 자연스럽게 끊어 준다."""
     out_lines = []
     for raw in text.split("\n"):
         line = raw.strip()
@@ -243,14 +180,12 @@ def wrap_lines(text, limit=20):
                 cur = w
             else:
                 cur = candidate
-                # 구두점으로 끝나고 이미 적당한 길이면 여기서 끊는 게 자연스럽다
                 if cur.endswith(BREAK_MARKS) and len(cur) >= limit * 0.6:
                     out_lines.append(cur)
                     cur = ""
         if cur:
             out_lines.append(cur)
 
-    # 이모지 등 아주 짧은 조각이 혼자 줄에 남으면 앞 줄에 붙인다
     merged = []
     for l in out_lines:
         if (l and len(l) <= 3 and merged and merged[-1]
@@ -259,7 +194,6 @@ def wrap_lines(text, limit=20):
         else:
             merged.append(l)
 
-    # 연속된 빈 줄은 하나로 정리
     result = []
     for l in merged:
         if l == "" and result and result[-1] == "":
@@ -269,17 +203,12 @@ def wrap_lines(text, limit=20):
 
 
 def trim_paragraphs(text, max_blocks=4):
-    """단락이 너무 많으면 핵심만 남긴다.
-
-    AI가 분량 지시를 어기고 길게 쓰는 경우를 코드로 보정한다.
-    보존 우선순위: 첫 단락(훅) + 둘째 단락(설명) + 마지막 단락들(결론/마무리)
-    중간의 늘어지는 부연 설명 단락을 걷어낸다.
-    """
+    """단락이 너무 많으면 핵심만 남긴다."""
     blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
     if len(blocks) <= max_blocks:
         return "\n\n".join(blocks)
-    head = blocks[:2]                 # 훅 + 무슨 일인지
-    tail = blocks[-(max_blocks - 2):]  # 결론 + 마무리
+    head = blocks[:2]
+    tail = blocks[-(max_blocks - 2):]
     return "\n\n".join(head + tail)
 
 
@@ -307,193 +236,424 @@ def _call_gemini(prompt):
 
 
 def _finalize(text, max_blocks):
-    text = trim_paragraphs(text, max_blocks=max_blocks)  # 단락 수 강제 (분량 통제)
-    text = wrap_lines(text, limit=20)                    # 줄바꿈 강제 보정
+    text = trim_paragraphs(text, max_blocks=max_blocks)
+    text = wrap_lines(text, limit=20)
     if len(text) > 495:
         text = text[:492] + "…"
     return text
 
 
-# ── 아침 "밤사이 AI 소식" / 저녁 대체발행 "저녁 실전 활용팁" ──
+# ── 혜택 정보 ('benefit') ──────────────────────────────────────
 
-def write_post(topics, theme, window, now_kst):
-    angle = WEEKDAY_ANGLES.get(now_kst.weekday(), "")
-    # 날짜+시간대 해시로 오늘의 후킹 패턴을 고정 선택 (재시도해도 동일)
-    seed = hashlib.sha256(f"{now_kst.strftime('%Y-%m-%d')}-{window}-hook".encode()).hexdigest()
-    hook = HOOK_PATTERNS[int(seed, 16) % len(HOOK_PATTERNS)]
+BENEFIT_QUERIES = [
+    "과기정통부 AI 지원 when:2d",
+    "정부 AI 무료 지원 when:2d",
+    "AI 바우처 신청 when:2d",
+    "지자체 AI 교육 무료 when:3d",
+    "소상공인 AI 지원사업 when:3d",
+    "AI 교육 수강생 모집 when:3d",
+    "국민 AI 무료 제공 when:2d",
+    "AI 크레딧 지원 when:2d",
+]
 
-    news_lines = []
-    for t in topics:
-        line = f"- 제목: {t['title']}"
-        if t.get("summary"):
-            line += f"\n  요약: {t['summary']}"
-        news_lines.append(line)
+_FRESH_NEW_WORDS = ("출범", "신설", "새로", "처음", "개시", "오픈", "시작", "확대", "개편")
+_FRESH_SCALE_PATTERN = re.compile(r"\d+\s*(?:만\s*원|원|명|개소|건)")
+_FRESH_URGENCY_WORDS = ("선착순", "마감", "한정", "조기", "소진")
+_FRESH_APPLY_WORDS = ("신청", "접수", "모집", "참여", "이용")
+_FRESH_EXCLUDE_WORDS = ("기업 대상", "컨소시엄", "협약", "입찰", "공모전 참가기업")
 
-    block_count = 4 if window == "morning" else 3
 
-    # 팔로우 전환용 각인 문구 — 매번 넣으면 광고처럼 보이므로 주 2회만 (월/금 아침)
-    show_identity = (window == "morning" and now_kst.weekday() in (0, 4))
-    identity_rule = ("""
-[계정 각인 — 오늘은 넣습니다]
-마지막 단락(따뜻한 마무리) 안에, 이 계정이 무엇을 하는 곳인지 알려주는 짧은 한 마디를 자연스럽게 녹여 넣으세요.
-광고처럼 들리지 않게, 담백하게 한 문장이면 충분합니다.
-(예: "AI 어렵지 않게 풀어드리는 이야기, 계속 올릴게요. 오늘 하루도 힘내세요!")
-"팔로우 해주세요" 같은 직접적인 요청은 쓰지 않습니다.
-""" if show_identity else "")
+def freshness_score(item):
+    """혜택 소재의 신선도를 0~4점으로 채점."""
+    text = f"{item.get('title', '')} {item.get('summary', '')}"
+    score = 0
+    if any(w in text for w in _FRESH_NEW_WORDS):
+        score += 1
+    if _FRESH_SCALE_PATTERN.search(text):
+        score += 1
+    if any(w in text for w in _FRESH_URGENCY_WORDS):
+        score += 1
+    if any(w in text for w in _FRESH_APPLY_WORDS) and not any(w in text for w in _FRESH_EXCLUDE_WORDS):
+        score += 1
+    return score
 
-    if window == "morning":
-        corner = """[오늘의 코너: 밤사이 AI 소식]
-아침 글은 "밤사이 있었던 AI 소식 1개를 누구보다 쉽게 풀어주는 코너"입니다.
 
-[글의 구조 — 반드시 이 4단으로, 질문 없이 따뜻한 응원으로 끝냅니다]
-1단락) 공감형 후킹 오프닝: 통계·수치를 나열하며 시작하지 말고, 독자의 마음을 툭 건드리는 공감형 한 줄로 시작
-2단락) 무슨 일이 있었나: 위 뉴스 중 **가장 흥미롭고 독자와 관련 깊은 것 딱 1개만** 골라, 처음 듣는 사람도 이해하게 쉽게 설명
-3단락) 왜 중요한가: 이 소식이 4050 독자(직장인·소상공인·부업 준비생)의 일상과 일에 왜 중요한지 한 줄로
-4단락) 따뜻한 마무리: 오늘 하루를 응원하는 따뜻한 문장으로 마무리
+# 신청 방법(전화번호/사이트/기관명/접수처) 실마리가 기사에 있는지 확인
+_APPLICATION_HINT_PATTERN = re.compile(
+    r"\d{2,4}-\d{3,4}-\d{4}"
+    r"|\d{4}-\d{4}"
+    r"|https?://\S+"
+    r"|\w+\.(?:go\.kr|or\.kr|co\.kr|com|kr)"
+    r"|접수처|홈페이지|누리집"
+    r"|\w+(?:부|청|처|원|공단|진흥원|센터|시청|도청|군청)"
+)
 
-여러 뉴스를 한 글에 섞지 않습니다. 딱 1개만 깊게 다룹니다.
-4단락이 이 글의 결론이자 마무리입니다. 질문으로 끝내지 않습니다."""
-    else:
-        corner = """[오늘의 코너: 저녁 실전 활용팁]
-저녁 글은 "오늘 바로 따라할 수 있는 AI 활용법 1가지를 알려주는 코너"입니다.
-(노션에 쓸 실제 경험 메모가 없을 때만 사용하는 대체 발행입니다.)
-뉴스는 참고 배경일 뿐, 중심은 실용적인 방법입니다.
 
-[글의 구조 — 반드시 이 3단으로, 질문 없이 정보로 끝냅니다]
-1단락) 이런 상황 있으시죠: 독자가 공감할 만한 일상·업무 속 불편함이나 궁금증 1가지
-2단락) 이렇게 해보세요: AI로 해결하는 구체적인 방법. 어떤 도구에 뭐라고 입력하면 되는지까지 (짧은 예시 문구 포함 가능)
-3단락) 이렇게 하면: 얻게 되는 결과나 절약되는 시간 — 이 글의 결론이자 마무리
+def has_application_hint(source_text):
+    return bool(_APPLICATION_HINT_PATTERN.search(source_text))
 
-방법은 딱 1가지만, 무료로 누구나 지금 바로 할 수 있는 것으로 제시합니다.
-질문으로 끝내지 않습니다."""
+
+def pick_benefit_item(date_str):
+    """신선도 3점 이상 + 신청 방법 정보가 있는 혜택 소재 1건을 고른다. 없으면 None."""
+    queries = _pick_queries(date_str, "benefit", BENEFIT_QUERIES, 4)
+    items = []
+    for q in queries:
+        items += fetch_news(q, 4)
+
+    seen = set()
+    dedup = []
+    for it in items:
+        if it["title"] in seen:
+            continue
+        seen.add(it["title"])
+        dedup.append(it)
+
+    scored = [(freshness_score(it), it) for it in dedup]
+    scored = [(s, it) for s, it in scored if s >= 3]
+    if not scored:
+        print(f"[혜택] 신선도 3점 이상 소재 없음(검토 {len(dedup)}건) → 큐로 진행")
+        return None
+
+    scored.sort(key=lambda pair: (-pair[0], -(pair[1].get("published_ts") or 0)))
+    best_score, best_item = scored[0]
+    source_text = f"{best_item['title']} {best_item.get('summary', '')}"
+    if not has_application_hint(source_text):
+        print(f"[혜택] 신청 방법 정보 없음 — 「{best_item['title']}」 → 큐로 진행")
+        return None
+
+    print(f"[혜택] 소재 선정: 「{best_item['title']}」 (신선도 {best_score}점)")
+    return best_item
+
+
+def _gen_benefit_draft(item, extra_prompt=""):
+    prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
+
+{PERSONA}
+
+아래는 방금 나온 정부·지자체 AI 지원 관련 기사입니다. 이 기사에 실제로 적힌 내용만 사용해
+스레드 게시글 1개를 한국어로 작성하세요. 기사에 없는 숫자·기관명·전화번호·마감일은
+절대 지어내지 않습니다.
+
+[기사]
+제목: {item['title']}
+요약: {item.get('summary', '')}
+
+[오늘의 코너: 혜택 정보]
+"놓치면 아까운 정부·지자체 AI 지원 소식을 가장 먼저 전하는 코너"입니다.
+
+[글의 구조 — 반드시 이 순서로]
+1) 질문형 도입 한 줄 — 독자 상황을 건드린다 (예: "AI 배우러 학원 알아보셨어요?")
+2) 반전 한 줄 — 핵심 혜택을 짧게 (예: "동네에서 공짜로 합니다.")
+3) 정체 — 어느 기관의 무슨 사업인지
+4) 규모와 내용 — 기사에 있는 숫자만
+5) 신청 방법 — 기사에 있는 전화번호·사이트명·문의처를 그대로
+6) 팔로우 이유 한 줄 — 예: "이런 지원 놓치지 않게 계속 찾아서 올려요"
+
+[사실성 규칙 — 가장 중요, 절대 위반 금지]
+- 기사 제목과 요약에 실제로 적힌 숫자, 금액, 인원, 기관명, 전화번호, 마감일만 옮겨 적습니다
+- 기사에 없는 수치나 기관명, 연락처를 추측하거나 지어내지 않습니다
+- 신청 방법 정보가 기사에 부분적으로만 있으면 있는 정보(기관명 등)까지만 안내합니다
+
+[어조 규칙]
+- 부드럽고 친근한 존댓말, 명령·경고·과장·어그로 금지
+- 도입부의 질문 1문장을 제외하면 질문으로 끝내지 않습니다
+
+[분량 규칙 — 반드시 지킬 것]
+- 전체 250~400자 (공백 포함). 신청 방법까지 있는 완결된 글이어야 합니다
+- 단락은 최대 6개
+
+[가독성 규칙]
+- 한 줄은 20자 이내로 끊어서 씁니다
+- 단락 사이에는 빈 줄을 넣습니다
+- 이모지는 딱 1개만
+- 해시태그·링크·인사말 금지
+- 게시글 본문만 출력 (설명·따옴표 없이)
+{extra_prompt}"""
+    text = _call_gemini(prompt)
+    return _finalize(text, max_blocks=6)
+
+
+def write_benefit_post(item, now_kst):
+    """혜택 글 초안을 생성하고 환각 검증을 2단으로 통과시킨다. 실패하면 None."""
+    source_text = f"{item['title']} {item.get('summary', '')}"
+
+    text = _gen_benefit_draft(item)
+    problems = find_fabrications(text, source_text)
+    if not problems:
+        print("[혜택 검증] 1차 통과")
+        return text
+    print(f"[혜택 검증] 1차 실패 — 문제: {problems}")
+
+    warn = f"""
+
+[경고 — 직전 시도에서 발견된 문제]
+아래 표현은 기사에 근거가 없습니다. 절대 다시 쓰지 마세요: {problems}
+숫자, 금액, 인원, 전화번호, 기관명, 마감일은 기사에 글자 그대로 적힌 것만 옮겨 적으세요.
+기사에 없으면 아예 언급하지 마세요."""
+    text2 = _gen_benefit_draft(item, extra_prompt=warn)
+    problems2 = find_fabrications(text2, source_text)
+    if not problems2:
+        print("[혜택 검증] 2차 통과")
+        return text2
+
+    print(f"[혜택 검증] 2차도 실패 — 문제: {problems2} → 혜택 글 포기, 큐로 진행")
+    return None
+
+
+# ── 환각 방어 (혜택 글 전용) ───────────────────────────────────
+
+RISKY_WORDS = ("선착순", "마감 임박", "조기 마감", "한정", "오늘까지", "내일까지", "무상", "전액")
+
+CLAIM_PATTERN = re.compile(
+    r"\d[\d,]*\s*(?:만\s*원|원|명|개소|개월|건|퍼센트|%|배)"
+    r"|\d+\s*월\s*\d+\s*일"
+    r"|\d+\s*일\s*(?:까지|간)"
+    r"|\d{2,4}-\d{3,4}-\d{4}"      # 전화번호
+    r"|\d{4}-\d{4}"                # 대표번호
+)
+
+_ORG_PATTERN = re.compile(r"\w+(?:부|청·처|원|공단|진흥원|센터|시청|도청|군청)")
+
+
+def _normalize_claim(s):
+    return re.sub(r"[\s,]", "", s)
+
+
+def find_fabrications(text, source_text):
+    """기사에 근거 없는 사실 주장을 찾아 목록으로 반환."""
+    problems = []
+    norm_source = _normalize_claim(source_text)
+
+    for m in CLAIM_PATTERN.finditer(text):
+        claim = m.group()
+        if _normalize_claim(claim) not in norm_source:
+            problems.append(claim)
+
+    for w in RISKY_WORDS:
+        if w in text and w not in source_text:
+            problems.append(w)
+
+    for m in _ORG_PATTERN.finditer(text):
+        org = m.group()
+        if org not in source_text:
+            problems.append(org)
+
+    return problems
+
+
+# ── 프롬프트 나눔 ('prompt') — 봇의 주력 ─────────────────────
+
+PROMPT_BANK = {
+    "office": [  # 직장인 업무
+        ("회의록 정리하기", "회의"),
+        ("받은 메일에 답장 쓰기", "메일"),
+        ("긴 보고서 핵심만 뽑기", "요약"),
+        ("주간 업무보고 쓰기", "주보"),
+        ("엑셀 수식 만들기", "엑셀"),
+        ("발표자료 목차 잡기", "발표"),
+        ("자료 비교표 만들기", "비교"),
+        ("거절 메일 정중하게 쓰기", "거절"),
+        ("일정 조율 메일 쓰기", "일정"),
+        ("회의 안건 정리하기", "안건"),
+        ("업무 인수인계서 쓰기", "인수"),
+        ("사과 메일 쓰기", "사과"),
+        ("메모를 표로 정리하기", "표"),
+        ("외국어 메일 번역하고 답장하기", "번역"),
+        ("면접 예상질문 뽑기", "면접"),
+        ("자기소개서 다듬기", "자소서"),
+        ("업무 매뉴얼 초안 쓰기", "매뉴얼"),
+        ("협업 요청 메시지 쓰기", "협업"),
+        ("긴 문서에서 필요한 부분만 찾기", "검색"),
+        ("하루 할 일 우선순위 정하기", "할일"),
+    ],
+    "biz": [  # 자영업·부업
+        ("상세페이지 문구 쓰기", "상세"),
+        ("상품 소개글 쓰기", "소개"),
+        ("고객 리뷰에 답글 달기", "리뷰"),
+        ("클레임 응대 문구 만들기", "클레임"),
+        ("SNS 홍보 문구 쓰기", "홍보"),
+        ("이벤트 안내문 쓰기", "이벤트"),
+        ("메뉴 설명 문구 쓰기", "메뉴"),
+        ("가격 인상 안내문 쓰기", "인상"),
+        ("단골 감사 메시지 쓰기", "단골"),
+        ("예약 안내 문구 만들기", "예약"),
+        ("배달앱 사장님 댓글 쓰기", "배달"),
+        ("전단지 문구 쓰기", "전단"),
+        ("블로그 포스팅 초안 쓰기", "블로그"),
+        ("경쟁사와 비교해 정리하기", "경쟁"),
+        ("매출 메모 정리하기", "매출"),
+        ("직원 공지문 쓰기", "공지"),
+        ("사업계획서 개요 잡기", "사업"),
+        ("지원사업 신청서 초안 쓰기", "신청"),
+        ("간판·명함 문구 만들기", "간판"),
+        ("휴무 안내문 쓰기", "휴무"),
+    ],
+    "life": [  # 생활·집안일
+        ("일주일 식단 짜기", "식단"),
+        ("장보기 목록 만들기", "장보기"),
+        ("냉장고 재료로 요리 정하기", "냉장고"),
+        ("아이 숙제 봐주기", "숙제"),
+        ("아이 독서록 도와주기", "독서록"),
+        ("여행 일정 짜기", "여행"),
+        ("어려운 공문서 쉬운 말로 풀기", "공문"),
+        ("계약서에서 확인할 점 찾기", "계약"),
+        ("병원 가기 전 질문 정리하기", "병원"),
+        ("가계부 항목 정리하기", "가계부"),
+        ("집안일 계획 세우기", "집안일"),
+        ("선물 고르기", "선물"),
+        ("경조사 문구 쓰기", "경조사"),
+        ("이사 준비 체크리스트 만들기", "이사"),
+        ("보험 약관 이해하기", "보험"),
+        ("자녀와 대화 주제 찾기", "대화"),
+        ("산책·스트레칭 습관 계획 세우기", "습관"),
+        ("반려동물 돌봄 메모 정리하기", "반려"),
+        ("부모님께 쉽게 설명하기", "설명"),
+        ("중고거래 판매글 쓰기", "중고"),
+    ],
+}
+AREAS = ["office", "biz", "life"]
+
+_PROMPT_QUALITY_RULES = """[프롬프트 품질 규칙 — 반드시 지킬 것]
+- 각 프롬프트는 6줄 이내, 그대로 복사해 쓸 수 있는 완성형 문장으로 작성
+- 사용자가 바꿔 넣을 자리는 반드시 [여기에 회의 내용 붙여넣기]처럼 대괄호로 표시
+- 출력 형식을 반드시 지정 (표로/3줄로/번호를 붙여서/글자 수 제한/말투 등). 빠지면 결과가 매번 달라집니다
+- "잘 써줘", "좋게 만들어줘" 같은 막연한 지시 금지
+- 전문용어 금지. 컴퓨터를 잘 모르는 사람도 읽을 수 있는 말로
+- 각 프롬프트 마지막 줄에 "없는 내용은 지어내지 마" 류의 제약을 넣을 것"""
+
+
+def _split_markers(raw, markers):
+    """raw 텍스트를 [마커] 단위로 분리."""
+    pattern = re.compile(r"\[(" + "|".join(re.escape(m) for m in markers) + r")\]")
+    parts = {m: "" for m in markers}
+    matches = list(pattern.finditer(raw))
+    for i, m in enumerate(matches):
+        key = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
+        parts[key] = raw[start:end].strip()
+    return parts
+
+
+def _gen_prompt_bundle(topic, closing_line):
+    prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
+
+{PERSONA}
+
+오늘의 프롬프트 나눔 주제: "{topic}"
+
+이 주제를 시간 순서로 쪼개 실전 프롬프트 3개를 만드세요.
+(예: 재료 정리 → 본작업 → 다듬기·확장·점검처럼, 같은 작업을 단계별로 쪼갠 것입니다.
+서로 다른 5개를 모으는 것이 아니라, 하나의 상황을 시간순으로 쪼갭니다.)
+
+{_PROMPT_QUALITY_RULES}
+
+[게시글 본문 — [본문] 마커 뒤에 이 구조로 작성]
+1줄) 상황 — 독자가 겪는 불편함 한 줄
+2줄) 해결 — 이 프롬프트로 뭐가 되는지
+3~4줄) 프롬프트 1번 본문 — 위 품질 규칙을 지킨 완성형 프롬프트
+1줄) 마무리 — 정확히 이 문장을 그대로 쓰세요: "{closing_line}"
+
+[분량 규칙]
+- [본문] 전체 200~300자 (공백 포함)
+- 질문으로 끝내지 않습니다
+- 첫 줄은 25자 이내, 배경 설명으로 시작하지 않습니다
+- 부드러운 존댓말, 명령·경고·과장 금지
+- 이모지는 [본문]에 딱 1개만
+- 해시태그·링크·인사말 금지
+
+[출력 형식 — 반드시 아래 마커를 정확히 그대로 사용]
+[본문]
+(위 구조를 따른 게시글 본문)
+[댓글2]
+(2번 프롬프트 — 완성형, 대괄호 자리표시, 출력형식 지정, 6줄 이내)
+[댓글3]
+(3번 프롬프트 — 완성형, 대괄호 자리표시, 출력형식 지정, 6줄 이내)
+
+마커 외의 다른 설명·따옴표는 출력하지 마세요."""
+    return _call_gemini(prompt)
+
+
+def write_prompt_post(state, now_kst):
+    """프롬프트 나눔 글을 작성한다. (본문, 댓글로 이어붙일 프롬프트 목록, 키워드 매칭 여부) 반환."""
+    seq = state.get("prompt_seq", 0)
+    area = AREAS[seq % 3]
+    idx = (seq // 3) % 20
+    topic, keyword = PROMPT_BANK[area][idx]
+
+    try:
+        has_kw = notion_api.has_keyword(keyword)
+    except Exception as e:
+        print(f"[경고] 키워드 확인 실패({keyword}): {e} → 댓글 유도 생략")
+        has_kw = False
+
+    closing_line = (
+        f'댓글에 "{keyword}" 남겨주시면 5개 더 보내드릴게요' if has_kw
+        else "이런 프롬프트 계속 올려요"
+    )
+
+    raw = _gen_prompt_bundle(topic, closing_line)
+    parts = _split_markers(raw, ("본문", "댓글2", "댓글3"))
+
+    body = parts["본문"] or raw
+    text = _finalize(body, max_blocks=4)
+
+    extra_comments = []
+    for k in ("댓글2", "댓글3"):
+        c = parts.get(k, "").strip()
+        if c:
+            extra_comments.append(_finalize(c, max_blocks=2))
+
+    print(f"[프롬프트] 영역={area} 주제={topic} 키워드매칭={has_kw}")
+    return text, extra_comments, has_kw
+
+
+# ── 업무 활용법 ('howto') ─────────────────────────────────────
+
+def write_howto_post(now_kst):
+    date_str = now_kst.strftime("%Y-%m-%d")
+    seed = int(hashlib.sha256(f"{date_str}-howto".encode()).hexdigest(), 16)
+    all_topics = [t for area in AREAS for t in PROMPT_BANK[area]]
+    topic, _keyword = all_topics[seed % len(all_topics)]
+
+    hook_seed = int(hashlib.sha256(f"{date_str}-howto-hook".encode()).hexdigest(), 16)
+    hook = HOOK_PATTERNS[hook_seed % len(HOOK_PATTERNS)]
 
     prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
 
 {PERSONA}
 
-아래 최신 뉴스(제목+요약)를 참고해서 스레드 게시글 1개를 한국어로 작성하세요.
+오늘의 업무 활용법 주제: "{topic}"
 
-[오늘의 뉴스]
-{chr(10).join(news_lines) if news_lines else '- (뉴스 없음: 일반 AI 활용 팁으로 작성)'}
+[글의 구조 — 반드시 이 4단으로]
+1단락) 이런 상황 있으시죠 — 공감 가는 장면
+2단락) 이렇게 해보세요 — AI로 해결하는 방법. 어느 서비스에 뭐라고 입력하는지까지 구체적으로
+3단락) 이렇게 하면 — 얻는 결과나 절약되는 시간
+4줄째) 팔로우 이유 한 줄 — 광고처럼 들리지 않게 담백한 한 문장
+  (예: "AI 어렵지 않게 풀어드리는 이야기, 계속 올릴게요")
+  "팔로우 해주세요" 같은 직접적인 요청은 쓰지 않습니다
 
-[주제 방향]
-{theme}
-오늘의 앵글: {angle}
-
-{corner}
-{identity_rule}
 [첫 줄 — 가장 중요]
-첫 줄은 이 패턴으로: {hook}
+첫 줄은 이 패턴을 참고해서: {hook}
+배경 설명으로 시작하지 말고, 25자 이내로 짧게.
 
-첫 줄에서 스크롤이 멈추지 않으면 아무도 나머지를 읽지 않습니다.
-반드시 지킬 것:
-- 통계나 수치를 나열하며 시작하지 마세요. 딱딱하고 힘이 없습니다.
-- 배경 설명("요즘 ~가 달라지고 있어요", "최근 소식인데요")으로 시작하지 마세요.
-- 이 글에서 **가장 공감 가거나 놀라운 사실 하나를 첫 줄에 바로** 꺼내세요.
-- 나쁜 예: "요즘 유튜브 분위기가 달라지고 있어요" → 좋은 예: "AI로 찍어낸 영상, 이제 수익 내기 어려워진대요"
-- 어그로·과장·경고는 쓰지 않되, 공감과 정보의 힘으로 눈길을 끕니다.
-- 첫 줄은 25자 이내로 짧게.
-- 첫 줄에서 약속한 내용은 본문에서 반드시 지킵니다.
-
-[사실성 규칙 — 가장 중요]
-- 위 뉴스의 제목과 요약에 실제로 적힌 내용만 사실로 언급합니다
-- 제목/요약에 없는 수치, 날짜, 발표 내용, 세부 사항을 추측해서 쓰지 않습니다
-- 확신할 수 없는 부분은 "~라고 해요", "~라는 소식이에요"처럼 전달하는 어조로 씁니다
-- 뉴스 내용이 불충분하면 뉴스 언급을 줄이고 일반적인 AI 활용 팁 중심으로 작성합니다
+[사실성 규칙]
+- 지어낸 통계·수치·사례를 사실인 것처럼 쓰지 않습니다
+- 확신할 수 없는 부분은 일반적인 조언 톤으로 씁니다
 
 [어조 규칙]
 - 부드럽고 친근한 존댓말, 옆에서 알려주는 느낌
 - 명령, 경고, 단정, 과장, 어그로 표현 금지
-- 강요하지 않고 제안하는 톤 ("~해보시는 것도 좋아요")
-
-[마무리]
-위 코너 구조에서 정한 마지막 단락 방식대로 자연스럽게 마무리합니다. 질문으로 끝내지 않습니다.
+- 질문으로 끝내지 않습니다
 
 [분량 규칙 — 반드시 지킬 것]
-- 전체 200~280자 (공백 포함). 길면 지루해서 끝까지 안 읽습니다.
-- **단락은 정확히 {block_count}개.** 그 이상 늘리지 마세요.
+- 전체 200~280자 (공백 포함)
+- **단락은 정확히 4개.**
 - 각 단락은 짧게: 2문장 이내
-- 하고 싶은 말이 더 있어도 과감히 버리세요. 짧고 선명한 글이 더 많이 읽힙니다.
 
-[가독성 규칙 — 줄바꿈이 핵심]
-- **한 줄은 반드시 20자 이내.** 20자가 넘으면 문장 중간이라도 끊어서 줄바꿈하세요.
-  나쁜 예: "인공지능으로 뚝딱 찍어낸 영상은 이제 돈을 벌기 어려워진다는 소식이 들려왔거든요."
-  좋은 예:
-    인공지능으로 뚝딱 찍어낸 영상은
-    이제 돈 벌기 어려워졌대요.
-- 의미가 끊기는 자연스러운 지점에서 줄을 나눕니다 (조사·어미 뒤)
+[가독성 규칙]
+- 한 줄은 20자 이내로 끊어서 씁니다
 - 단락 사이에는 빈 줄을 넣어 시각적으로 구분합니다
-- 어려운 용어는 쉬운 말로 바꿔 씁니다 (전문용어를 써야 하면 괄호로 짧게 풀이)
-- 이모지는 글 전체에 딱 1개만 사용
-- 해시태그·링크·인사말("안녕하세요" 등) 금지
-- 게시글 본문만 출력 (설명·따옴표 없이)"""
-
-    text = _call_gemini(prompt)
-    return _finalize(text, max_blocks=4)
-
-
-# ── 저녁 "AI로 이렇게 바뀌었어요" (노션 소재 기반) ────────────
-
-def write_evening_post_from_note(note, now_kst):
-    """노션 '저녁 소재 노트'의 실제 경험 메모를 뼈대 삼아 후킹형 글로 다듬는다."""
-    seed = hashlib.sha256(f"{now_kst.strftime('%Y-%m-%d')}-evening-note-hook".encode()).hexdigest()
-    hook = HOOK_PATTERNS[int(seed, 16) % len(HOOK_PATTERNS)]
-
-    note_lines = [
-        f"- 제목: {note['이름']}" if note.get("이름") else None,
-        f"- 상황: {note['상황']}" if note.get("상황") else None,
-        f"- AI 활용: {note['ai활용']}" if note.get("ai활용") else None,
-        f"- 변화/결과: {note['변화결과']}" if note.get("변화결과") else None,
-    ]
-    note_text = "\n".join(l for l in note_lines if l)
-
-    prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
-
-{PERSONA}
-
-아래는 소담쌤이 실제로 겪은 AI 활용 경험 메모입니다. 이 메모에 있는 사실만 바탕으로
-스레드 게시글 1개를 한국어로 작성하세요. 메모에 없는 내용은 절대 지어내지 않습니다.
-
-[오늘의 소재 — 실제 경험 메모]
-{note_text}
-
-[오늘의 코너: AI로 이렇게 바뀌었어요]
-저녁 글은 "소담쌤이 실제로 겪은 AI 활용 경험을 진솔하게 나누는 코너"입니다.
-뉴스가 아니라 실제 경험이라는 점이 이 코너의 힘입니다. 과장하지 않고 담백하게, 하지만 구체적으로 씁니다.
-
-[글의 구조 — 반드시 이 4단으로, 질문 없이 정보로 끝냅니다]
-1단락) 구체적 상황: 위 '상황'을 바탕으로, 독자가 공감할 만한 그날의 장면을 구체적으로 묘사
-2단락) AI로 무엇을 했는지: 위 'AI 활용'을 바탕으로, 실제로 어떤 도구를 어떻게 활용했는지
-3단락) 실제로 달라진 점: 위 '변화/결과'를 바탕으로, 그래서 무엇이 어떻게 달라졌는지
-4단락) 오늘 바로 써볼 수 있는 실행 팁: 독자가 오늘 저녁 바로 따라해볼 수 있는 구체적인 한 걸음
-
-4단락이 이 글의 결론이자 마무리입니다. 질문으로 끝내지 않습니다.
-
-[첫 줄 — 가장 중요]
-첫 줄은 이 패턴을 참고해 위 '상황'에서 가장 공감 가는 지점을 그대로 꺼내세요: {hook}
-배경 설명으로 시작하지 말고, 그날 있었던 일 자체로 바로 들어가세요.
-첫 줄은 25자 이내로 짧게.
-
-[사실성 규칙 — 가장 중요]
-- 위 메모(상황 / AI 활용 / 변화·결과)에 실제로 적힌 내용만 사실로 언급합니다
-- 메모에 없는 수치, 도구 이름, 결과를 추측해서 지어내지 않습니다
-- 메모 내용이 짧으면 억지로 부풀리지 말고, 있는 그대로 담백하게 씁니다
-
-[어조 규칙]
-- 부드럽고 친근한 존댓말, 옆에서 알려주는 느낌. 자랑이 아니라 나눔의 태도
-- 명령, 경고, 단정, 과장, 어그로 표현 금지
-- 4050 독자가 "나도 오늘 해볼 수 있겠다"고 느끼게
-
-[분량 규칙 — 반드시 지킬 것]
-- 전체 200~280자 (공백 포함). 길면 지루해서 끝까지 안 읽습니다.
-- **단락은 정확히 4개.** 그 이상 늘리지 마세요.
-- 각 단락은 짧게: 2문장 이내
-
-[가독성 규칙 — 줄바꿈이 핵심]
-- **한 줄은 반드시 20자 이내.** 20자가 넘으면 문장 중간이라도 끊어서 줄바꿈하세요.
-- 의미가 끊기는 자연스러운 지점에서 줄을 나눕니다 (조사·어미 뒤)
-- 4개 단락 사이에는 빈 줄을 넣어 시각적으로 구분합니다
-- 어려운 용어는 쉬운 말로 바꿔 씁니다 (전문용어를 써야 하면 괄호로 짧게 풀이)
 - 이모지는 글 전체에 딱 1개만 사용
 - 해시태그·링크·인사말("안녕하세요" 등) 금지
 - 게시글 본문만 출력 (설명·따옴표 없이)"""
@@ -510,55 +670,65 @@ def main():
         raise SystemExit("[설정 오류] GEMINI_API_KEY가 비어 있습니다. (aistudio.google.com에서 무료 발급)")
 
     now_kst = datetime.datetime.now(KST)
-    force = os.environ.get("FORCE_WINDOW", "").strip()  # 수동 테스트용: morning/evening
+    date_str = now_kst.strftime("%Y-%m-%d")
+    force = os.environ.get("FORCE_WINDOW", "").strip()
 
-    if force in WINDOWS:
-        window = force
-        print(f"[강제 실행] {window} 발행을 즉시 진행합니다.")
+    state = load_posted()
+
+    if force:
+        key = date_str
+        print(f"[강제 실행] 시간 판단 없이 즉시 발행합니다. (FORCE_WINDOW={force})")
     else:
         window = current_window(now_kst)
         if not window:
             print(f"[대기] 지금({now_kst.strftime('%H:%M')} KST)은 발행 시간대가 아닙니다.")
             return
-
-    state = load_posted()
-
-    if force in WINDOWS:
-        key = f"{now_kst.strftime('%Y-%m-%d')}-{window}-force{now_kst.strftime('%H%M')}"
-    else:
-        ok, key, reason = should_post_now(now_kst, window, state)
-        print(f"[판단] {reason}")
+        ok, key, reason = should_post_now(now_kst, state)
+        print(f"[판단] ({window}) {reason}")
         if not ok:
             return
 
-    # 저녁 시간대는 노션 "저녁 소재 노트"의 실제 경험 메모를 우선 사용한다.
-    evening_note = notion_api.get_unused_evening_note() if window == "evening" else None
-    topics = []
+    content_type = None
+    text = None
+    extra_comments = []
 
-    if evening_note:
-        print(f"[저녁 소재] 노션 메모 사용: {evening_note['이름']} ({evening_note.get('날짜') or '날짜 없음'})")
-        text = write_evening_post_from_note(evening_note, now_kst)
-    else:
-        if window == "evening":
-            print("[저녁 소재] 미사용 노션 메모 없음 → 뉴스 기반 자동 생성으로 대체합니다.")
-        topics, theme = collect_topics(window, now_kst, state["used_titles"])
-        print(f"[뉴스] {len(topics)}건 수집: {[t['title'] for t in topics[:3]]} ...")
-        text = write_post(topics, theme, window, now_kst)
+    benefit_item = pick_benefit_item(date_str)
+    if benefit_item:
+        benefit_text = write_benefit_post(benefit_item, now_kst)
+        if benefit_text:
+            content_type = "benefit"
+            text = benefit_text
+            state["used_titles"].append(benefit_item["title"])
 
+    if not content_type:
+        kind = POST_CYCLE[state["cycle_index"] % len(POST_CYCLE)]
+        if kind == "prompt":
+            text, extra_comments, _has_kw = write_prompt_post(state, now_kst)
+            content_type = "prompt"
+        else:
+            text = write_howto_post(now_kst)
+            content_type = "howto"
+
+    print(f"[유형] {content_type}")
     print(f"[초안] {text[:80]}...")
 
     post_id = threads_api.publish_text(text)
     print(f"[발행 완료] post id: {post_id}")
 
-    if evening_note:
-        try:
-            notion_api.mark_evening_note_used(evening_note["page_id"])
-            print(f"[노션] 사용여부 업데이트 완료: {evening_note['이름']}")
-        except Exception as e:
-            print(f"[경고] 발행은 완료됐지만 노션 사용여부 업데이트에 실패했습니다: {e}")
+    if content_type == "prompt":
+        for i, c in enumerate(extra_comments, start=2):
+            try:
+                time.sleep(3)
+                threads_api.reply_to(post_id, c)
+                print(f"[댓글 {i}] 발행 완료")
+            except Exception as e:
+                print(f"[경고] 댓글 {i} 발행 실패 (본문은 정상 발행됨): {e}")
 
-    state["posted"][key] = {"time": now_kst.isoformat(), "post_id": post_id}
-    state["used_titles"] += [t["title"] for t in topics]
+    state["posted"][key] = {"time": now_kst.isoformat(), "post_id": post_id, "type": content_type}
+    if content_type != "benefit":
+        state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)
+    if content_type == "prompt":
+        state["prompt_seq"] = state.get("prompt_seq", 0) + 1
     save_posted(state)
 
 

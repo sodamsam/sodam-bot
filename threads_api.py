@@ -66,3 +66,8 @@ def publish_text(text, reply_to_id=None, wait_seconds=None):
     time.sleep(wait_seconds)  # Threads 서버가 컨테이너를 처리할 시간 (공식 권장)
     result = _post("/me/threads_publish", {"creation_id": creation_id})
     return result.get("id")
+
+
+def reply_to(post_id, text):
+    """post_id 게시물(또는 댓글)에 내 계정으로 댓글을 단다."""
+    return publish_text(text, reply_to_id=post_id, wait_seconds=8)

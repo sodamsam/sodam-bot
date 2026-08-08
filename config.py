@@ -17,10 +17,6 @@ THREADS_ACCESS_TOKEN = os.environ.get("THREADS_ACCESS_TOKEN", "")
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "")
 
-# 저녁 "AI로 이렇게 바뀌었어요" 코너용 — 노션 "저녁 소재 노트" DB
-# GitHub Secret이 등록 안 되어 있으면 빈 문자열이 넘어오므로, `or`로 기본값을 지킨다.
-NOTION_EVENING_DB_ID = os.environ.get("NOTION_EVENING_DB_ID") or "3af246dcc32680efb00ed1bc2b8ba2fb"
-
 # ── 선택 값 (기본값 있음) ────────────────────────────────────
 # 노션 페이지에 키워드가 지정 안 된 경우, 이 단어가 댓글에 있으면 최신 페이지를 보냄
 DEFAULT_KEYWORD = os.environ.get("DEFAULT_KEYWORD", "신청")

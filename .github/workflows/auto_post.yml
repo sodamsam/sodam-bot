@@ -2,20 +2,20 @@ name: 매일 자동 글 발행
 
 on:
   schedule:
-    # KST 아침 7~8시 = UTC 22시(전날), 20분 간격으로 확인
-    - cron: "0,20,40 22 * * *"
-    # KST 저녁 19~20시 = UTC 10시, 20분 간격으로 확인
-    - cron: "0,20,40 10 * * *"
+    # 1순위: KST 07~09시(=UTC 22~23시 전날, 00시 당일), 20분 간격으로 확인
+    - cron: "0,20,40 22,23 * * *"
+    - cron: "0,20,40 0 * * *"
+    # 2순위(1순위 놓쳤을 때 대비): KST 18~20시 = UTC 9~11시, 20분 간격으로 확인
+    - cron: "0,20,40 9,10,11 * * *"
   workflow_dispatch:
     inputs:
       force_window:
-        description: "비워두면 평소처럼 시간대 범위 판단, 값을 넣으면 즉시 강제 발행"
+        description: "비워두면 평소처럼 시간대 범위 판단, force를 넣으면 시간 판단 없이 즉시 발행"
         required: false
         type: choice
         options:
           - ""
-          - morning
-          - evening
+          - force
 
 permissions:
   contents: write
@@ -44,7 +44,6 @@ jobs:
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-          NOTION_EVENING_DB_ID: ${{ secrets.NOTION_EVENING_DB_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           FORCE_WINDOW: ${{ inputs.force_window }}
