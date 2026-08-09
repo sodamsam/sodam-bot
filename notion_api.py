@@ -88,6 +88,18 @@ def has_keyword(keyword):
     return result
 
 
+def has_any_material():
+    """봇 자료 DB에 자료가 하나라도 있는지 확인. 실패 시 False로 간주."""
+    try:
+        pages = get_pages()
+    except Exception as e:
+        print(f"[자료 확인] 노션 DB 조회 실패({e}) → False로 간주")
+        return False
+    result = len(pages) > 0
+    print(f"[자료 확인] 노션 DB 자료 개수={len(pages)} → {result}")
+    return result
+
+
 def match_page(comment_text, pages):
     """댓글 텍스트에 맞는 노션 페이지를 찾는다.
 

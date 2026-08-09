@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v2.1 패치 테스트: 인스타 유도 문구, 마무리 문구 선택, 발행 흐름."""
+"""v2.1/v2.2 패치 테스트: 인스타·신청 유도 문구, 마무리 문구 선택, 발행 흐름."""
 import json
 import sys
 import os
@@ -17,31 +17,89 @@ import config
 
 # ── pick_closing_line 단위 테스트 ───────────────────────────────
 
-def test_instagram_line_appears_one_in_five():
-    """cta_seq 0~9 범위에서 5번에 1번꼴로 인스타 문구가 나온다."""
-    for cta_seq in range(10):
-        line = auto_post.pick_closing_line("howto", False, None, cta_seq)
-        if cta_seq % 5 == 0:
-            assert line in auto_post.INSTAGRAM_CTA_LINES, (cta_seq, line)
+def test_three_way_split_when_material_exists():
+    """cta_seq 0~8 범위, 자료 존재=True → 신청/인스타/일반이 정확히 3:3:3으로 순환한다."""
+    counts = {"신청": 0, "인스타": 0, "일반": 0}
+    for cta_seq in range(9):
+        line = auto_post.pick_closing_line("howto", False, None, cta_seq, has_material=True)
+        if line in auto_post.APPLY_CTA_LINES:
+            counts["신청"] += 1
+            assert cta_seq % 3 == 0
+        elif line in auto_post.INSTAGRAM_CTA_LINES:
+            counts["인스타"] += 1
+            assert cta_seq % 3 == 1
+        elif line in auto_post.GENERIC_FOLLOW_LINES:
+            counts["일반"] += 1
+            assert cta_seq % 3 == 2
         else:
+            pytest.fail(f"알 수 없는 문구: {line}")
+    assert counts == {"신청": 3, "인스타": 3, "일반": 3}
+
+
+def test_each_pool_rotates_through_all_its_lines():
+    """각 문구 풀(신청/인스타/일반) 내부에서도 한 문장만 반복되지 않고 3개가 골고루 순환한다."""
+    seen = {"신청": set(), "인스타": set(), "일반": set()}
+    for cta_seq in range(9):
+        line = auto_post.pick_closing_line("howto", False, None, cta_seq, has_material=True)
+        if line in auto_post.APPLY_CTA_LINES:
+            seen["신청"].add(line)
+        elif line in auto_post.INSTAGRAM_CTA_LINES:
+            seen["인스타"].add(line)
+        else:
+            seen["일반"].add(line)
+    assert len(seen["신청"]) == len(auto_post.APPLY_CTA_LINES)
+    assert len(seen["인스타"]) == len(auto_post.INSTAGRAM_CTA_LINES)
+    assert len(seen["일반"]) == len(auto_post.GENERIC_FOLLOW_LINES)
+
+
+def test_apply_cta_falls_back_to_generic_when_no_material():
+    """자료 DB가 비어있으면(has_material=False) 신청 유도 자리는 일반 문구로 대체되고,
+    신청 유도 문구는 어떤 cta_seq에서도 절대 나오지 않는다."""
+    for cta_seq in range(9):
+        line = auto_post.pick_closing_line("howto", False, None, cta_seq, has_material=False)
+        assert line not in auto_post.APPLY_CTA_LINES, (cta_seq, line)
+        if cta_seq % 3 == 0:
             assert line in auto_post.GENERIC_FOLLOW_LINES, (cta_seq, line)
 
 
 def test_keyword_funnel_always_wins_regardless_of_cta_seq():
-    """has_keyword=True면 cta_seq 값과 무관하게 항상 댓글 퍼널 문구."""
+    """has_keyword=True면 cta_seq·자료 존재 여부와 무관하게 항상 정확 매칭 댓글 퍼널."""
     for cta_seq in range(10):
-        line = auto_post.pick_closing_line("prompt", True, "식단", cta_seq)
-        assert line == '댓글에 "식단" 남겨주시면 5개 더 보내드릴게요'
-        assert line not in auto_post.INSTAGRAM_CTA_LINES
-        assert line not in auto_post.GENERIC_FOLLOW_LINES
+        for has_material in (True, False):
+            line = auto_post.pick_closing_line("prompt", True, "식단", cta_seq, has_material)
+            assert line == '댓글에 "식단" 남겨주시면 5개 더 보내드릴게요'
+            assert line not in auto_post.INSTAGRAM_CTA_LINES
+            assert line not in auto_post.GENERIC_FOLLOW_LINES
+            assert line not in auto_post.APPLY_CTA_LINES
 
 
-def test_benefit_never_mixes_instagram_line():
-    """post_type='benefit'일 때 인스타 문구가 절대 섞이지 않는다."""
+def test_benefit_never_mixes_apply_or_instagram_line():
+    """post_type='benefit'일 때 신청 유도·인스타 문구가 절대 섞이지 않는다."""
     for cta_seq in range(20):
-        line = auto_post.pick_closing_line("benefit", False, None, cta_seq)
-        assert line == auto_post.BENEFIT_FOLLOW_LINE
-        assert line not in auto_post.INSTAGRAM_CTA_LINES
+        for has_material in (True, False):
+            line = auto_post.pick_closing_line("benefit", False, None, cta_seq, has_material)
+            assert line == auto_post.BENEFIT_FOLLOW_LINE
+            assert line not in auto_post.INSTAGRAM_CTA_LINES
+            assert line not in auto_post.APPLY_CTA_LINES
+
+
+def test_has_material_cached_per_day(monkeypatch):
+    """자료 존재 여부는 같은 날짜 안에서는 재조회하지 않고 state에 캐시된 값을 쓴다."""
+    calls = {"n": 0}
+
+    def fake_has_any_material():
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(notion_api, "has_any_material", fake_has_any_material)
+
+    state = {}
+    assert auto_post._get_has_material(state, "2026-08-09") is True
+    assert auto_post._get_has_material(state, "2026-08-09") is True
+    assert calls["n"] == 1  # 같은 날짜 → 재조회 없음
+
+    assert auto_post._get_has_material(state, "2026-08-10") is True
+    assert calls["n"] == 2  # 날짜가 바뀌면 재조회
 
 
 def test_cta_seq_persists_across_save_and_load(tmp_path, monkeypatch):
@@ -71,8 +129,9 @@ def test_generic_phrase_removed_from_source():
 
     for post_type, has_kw in (("howto", False), ("prompt", False)):
         for cta_seq in range(20):
-            line = auto_post.pick_closing_line(post_type, has_kw, "테스트", cta_seq)
-            assert line != "이런 프롬프트 계속 올려요"
+            for has_material in (True, False):
+                line = auto_post.pick_closing_line(post_type, has_kw, "테스트", cta_seq, has_material)
+                assert line != "이런 프롬프트 계속 올려요"
 
 
 # ── mock 기반 시나리오 (3-1-C) ──────────────────────────────────
@@ -153,7 +212,11 @@ def test_scenario_keyword_registered(monkeypatch):
 
 
 def test_scenario_keyword_not_registered(monkeypatch):
-    """키워드가 노션에 등록 안 된 경우 → GENERIC 또는 INSTAGRAM 문구, 옛 문구는 없음."""
+    """키워드가 노션에 등록 안 된 경우 → GENERIC/INSTAGRAM/APPLY 문구 중 하나, 옛 문구는 없음.
+
+    이 mock은 노션 DB를 완전히 빈 것으로 응답하므로(자료 0개), has_any_material()도
+    False가 되어 신청 유도는 자동으로 배제되고 cta_seq=0 → 일반 문구로 대체된다.
+    """
     monkeypatch.setattr(auto_post.requests, "post", _make_mock_post(keyword_registered=False))
 
     # seq=0 → office 영역 idx=0 → ("회의록 정리하기", "회의") — 노션엔 등록 안 된 것으로 mock
@@ -165,6 +228,8 @@ def test_scenario_keyword_not_registered(monkeypatch):
 
     assert has_kw is False
     normalized_text = _normalize(text)
+    # 자료 DB가 비어있는 mock이므로 신청 유도는 절대 나오면 안 된다.
+    assert not any(_normalize(c) in normalized_text for c in auto_post.APPLY_CTA_LINES)
     candidates = auto_post.GENERIC_FOLLOW_LINES + auto_post.INSTAGRAM_CTA_LINES
     assert any(_normalize(c) in normalized_text for c in candidates)
     assert "이런프롬프트계속올려요" not in normalized_text

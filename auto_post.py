@@ -80,6 +80,15 @@ INSTAGRAM_CTA_LINES = [
 # pick_closing_line()이 인스타 문구로 새지 않도록 막는 고정 기본값일 뿐이다.
 BENEFIT_FOLLOW_LINE = "이런 지원 놓치지 않게 계속 찾아서 올려요"
 
+# 정확한 키워드 매칭이 안 될 때, 신청 만능 키워드로 유도하는 문구 풀.
+# comment_bot.py의 DEFAULT_KEYWORD("신청") 로직과 짝을 이룬다:
+# 댓글에 "신청"이 있으면 노션 DB에서 가장 최근 등록된 자료로 자동 응답한다.
+APPLY_CTA_LINES = [
+    "댓글에 '신청'만 남겨주시면 요즘 나눔 중인 자료 보내드려요",
+    "지금 나눠드리고 있는 자료 있어요, 댓글에 '신청' 남겨주세요",
+    "요즘 나눔 중인 거 받고 싶으시면 댓글에 '신청'이라고 남겨주세요",
+]
+
 # 첫 줄 공식 — 어그로 없이 '정보의 힘'으로 스크롤을 멈추게 하는 패턴 (날마다 랜덤)
 HOOK_PATTERNS = [
     '가장 놀라운 사실을 그대로 첫 줄에 (예: "AI로 찍어낸 영상, 이제 수익 내기 어려워진대요")',
@@ -103,6 +112,7 @@ def load_posted():
     data.setdefault("cycle_index", 0)
     data.setdefault("prompt_seq", 0)
     data.setdefault("cta_seq", 0)
+    data.setdefault("material_check", {})
     return data
 
 
@@ -117,17 +127,42 @@ def save_posted(state):
 
 # ── 마무리 문구 선택 ─────────────────────────────────────────
 
-def pick_closing_line(post_type, has_keyword, keyword, cta_seq):
-    """마무리 문구를 결정한다. 댓글 퍼널이 최우선이며,
-    인스타 유도는 5회 중 1회꼴로만 등장시킨다."""
+def _get_has_material(state, date_str):
+    """봇 자료 DB에 자료가 있는지 하루 단위로 캐시해서 확인한다."""
+    cache = state.get("material_check") or {}
+    if cache.get("date") == date_str:
+        return cache["has_material"]
+    has_material = notion_api.has_any_material()
+    state["material_check"] = {"date": date_str, "has_material": has_material}
+    return has_material
+
+
+def pick_closing_line(post_type, has_keyword, keyword, cta_seq, has_material):
+    """마무리 문구를 결정한다. 우선순위:
+    1) 정확 키워드 매칭 댓글 퍼널 (최우선)
+    2) benefit 고정 문구
+    3) 신청 만능 유도 / 인스타 유도 / 일반 문구 — cta_seq % 3으로 3분의 1씩 순환
+       (신청 유도는 자료 DB가 비어있으면 일반 문구로 대체)"""
     if post_type == "prompt" and has_keyword:
-        return f'댓글에 "{keyword}" 남겨주시면 5개 더 보내드릴게요'
-    if post_type == "benefit":
-        return BENEFIT_FOLLOW_LINE
-    if cta_seq % 5 == 0:
-        idx = (cta_seq // 5) % len(INSTAGRAM_CTA_LINES)
-        return INSTAGRAM_CTA_LINES[idx]
-    return GENERIC_FOLLOW_LINES[cta_seq % len(GENERIC_FOLLOW_LINES)]
+        line_type = "정확매칭"
+        line = f'댓글에 "{keyword}" 남겨주시면 5개 더 보내드릴게요'
+    elif post_type == "benefit":
+        line_type = "혜택"
+        line = BENEFIT_FOLLOW_LINE
+    else:
+        choice = cta_seq % 3
+        if choice == 0 and has_material:
+            line_type = "신청유도"
+            line = APPLY_CTA_LINES[(cta_seq // 3) % len(APPLY_CTA_LINES)]
+        elif choice == 1:
+            line_type = "인스타유도"
+            line = INSTAGRAM_CTA_LINES[(cta_seq // 3) % len(INSTAGRAM_CTA_LINES)]
+        else:
+            line_type = "일반문구"
+            line = GENERIC_FOLLOW_LINES[(cta_seq // 3) % len(GENERIC_FOLLOW_LINES)]
+
+    print(f"[마무리 문구 선택] 유형={line_type} (cta_seq={cta_seq}, 자료 존재={has_material})")
+    return line
 
 
 # ── 시간 판단 ────────────────────────────────────────────────
@@ -620,8 +655,10 @@ def write_prompt_post(state, now_kst):
 
     has_kw = notion_api.has_keyword(keyword)
 
+    date_str = now_kst.strftime("%Y-%m-%d")
+    has_material = _get_has_material(state, date_str)
     cta_seq = state.get("cta_seq", 0)
-    closing_line = pick_closing_line("prompt", has_kw, keyword, cta_seq)
+    closing_line = pick_closing_line("prompt", has_kw, keyword, cta_seq, has_material)
     print(f"[마무리 문구] {closing_line}")
 
     raw = _gen_prompt_bundle(topic, closing_line)
@@ -651,8 +688,9 @@ def write_howto_post(state, now_kst):
     hook_seed = int(hashlib.sha256(f"{date_str}-howto-hook".encode()).hexdigest(), 16)
     hook = HOOK_PATTERNS[hook_seed % len(HOOK_PATTERNS)]
 
+    has_material = _get_has_material(state, date_str)
     cta_seq = state.get("cta_seq", 0)
-    closing_line = pick_closing_line("howto", False, None, cta_seq)
+    closing_line = pick_closing_line("howto", False, None, cta_seq, has_material)
     print(f"[마무리 문구] {closing_line}")
 
     prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
