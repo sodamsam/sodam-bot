@@ -59,6 +59,27 @@ PERSONA = """[계정 정체성 — 소담 AI 랩 (@sodam_ai_lab)]
 # 7일 주기 순환 큐 — 요일에 고정하지 않아 발행이 누락돼도 순서만 밀리고 깨지지 않는다.
 POST_CYCLE = ["prompt", "prompt", "howto", "prompt", "prompt", "howto", "prompt"]
 
+INSTAGRAM_HANDLE = "sodam_ai_lab"
+
+# 프롬프트/업무활용 글에서 키워드 댓글 퍼널이 없을 때 쓰는 마무리 문구 풀
+# "이런 프롬프트 계속 올려요"는 매번 반복되어 뻔해 보이므로 제외한다.
+GENERIC_FOLLOW_LINES = [
+    "AI 어렵지 않게 풀어드리는 이야기, 계속 올릴게요",
+    "이런 활용법 매일 정리해서 올려요",
+    "다음에도 바로 써먹을 수 있는 걸로 가져올게요",
+]
+
+# 가끔 섞어 넣는 인스타 유도 문구 풀
+INSTAGRAM_CTA_LINES = [
+    f"카드로 더 보기 편하게 정리해서 인스타 {INSTAGRAM_HANDLE}에도 올려요",
+    f"인스타 {INSTAGRAM_HANDLE}에 카드뉴스로 한눈에 정리해뒀어요",
+    f"더 깔끔하게 보고 싶으시면 인스타 {INSTAGRAM_HANDLE}도 있어요",
+]
+
+# benefit 글은 기사 내용에 맞춰 Gemini가 팔로우 이유를 직접 쓰므로 이 문구는
+# pick_closing_line()이 인스타 문구로 새지 않도록 막는 고정 기본값일 뿐이다.
+BENEFIT_FOLLOW_LINE = "이런 지원 놓치지 않게 계속 찾아서 올려요"
+
 # 첫 줄 공식 — 어그로 없이 '정보의 힘'으로 스크롤을 멈추게 하는 패턴 (날마다 랜덤)
 HOOK_PATTERNS = [
     '가장 놀라운 사실을 그대로 첫 줄에 (예: "AI로 찍어낸 영상, 이제 수익 내기 어려워진대요")',
@@ -81,6 +102,7 @@ def load_posted():
     data.setdefault("used_titles", [])
     data.setdefault("cycle_index", 0)
     data.setdefault("prompt_seq", 0)
+    data.setdefault("cta_seq", 0)
     return data
 
 
@@ -91,6 +113,21 @@ def save_posted(state):
     state["posted"] = {k: state["posted"][k] for k in keys}
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+# ── 마무리 문구 선택 ─────────────────────────────────────────
+
+def pick_closing_line(post_type, has_keyword, keyword, cta_seq):
+    """마무리 문구를 결정한다. 댓글 퍼널이 최우선이며,
+    인스타 유도는 5회 중 1회꼴로만 등장시킨다."""
+    if post_type == "prompt" and has_keyword:
+        return f'댓글에 "{keyword}" 남겨주시면 5개 더 보내드릴게요'
+    if post_type == "benefit":
+        return BENEFIT_FOLLOW_LINE
+    if cta_seq % 5 == 0:
+        idx = (cta_seq // 5) % len(INSTAGRAM_CTA_LINES)
+        return INSTAGRAM_CTA_LINES[idx]
+    return GENERIC_FOLLOW_LINES[cta_seq % len(GENERIC_FOLLOW_LINES)]
 
 
 # ── 시간 판단 ────────────────────────────────────────────────
@@ -581,16 +618,11 @@ def write_prompt_post(state, now_kst):
     idx = (seq // 3) % 20
     topic, keyword = PROMPT_BANK[area][idx]
 
-    try:
-        has_kw = notion_api.has_keyword(keyword)
-    except Exception as e:
-        print(f"[경고] 키워드 확인 실패({keyword}): {e} → 댓글 유도 생략")
-        has_kw = False
+    has_kw = notion_api.has_keyword(keyword)
 
-    closing_line = (
-        f'댓글에 "{keyword}" 남겨주시면 5개 더 보내드릴게요' if has_kw
-        else "이런 프롬프트 계속 올려요"
-    )
+    cta_seq = state.get("cta_seq", 0)
+    closing_line = pick_closing_line("prompt", has_kw, keyword, cta_seq)
+    print(f"[마무리 문구] {closing_line}")
 
     raw = _gen_prompt_bundle(topic, closing_line)
     parts = _split_markers(raw, ("본문", "댓글2", "댓글3"))
@@ -610,7 +642,7 @@ def write_prompt_post(state, now_kst):
 
 # ── 업무 활용법 ('howto') ─────────────────────────────────────
 
-def write_howto_post(now_kst):
+def write_howto_post(state, now_kst):
     date_str = now_kst.strftime("%Y-%m-%d")
     seed = int(hashlib.sha256(f"{date_str}-howto".encode()).hexdigest(), 16)
     all_topics = [t for area in AREAS for t in PROMPT_BANK[area]]
@@ -618,6 +650,10 @@ def write_howto_post(now_kst):
 
     hook_seed = int(hashlib.sha256(f"{date_str}-howto-hook".encode()).hexdigest(), 16)
     hook = HOOK_PATTERNS[hook_seed % len(HOOK_PATTERNS)]
+
+    cta_seq = state.get("cta_seq", 0)
+    closing_line = pick_closing_line("howto", False, None, cta_seq)
+    print(f"[마무리 문구] {closing_line}")
 
     prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
 
@@ -629,8 +665,7 @@ def write_howto_post(now_kst):
 1단락) 이런 상황 있으시죠 — 공감 가는 장면
 2단락) 이렇게 해보세요 — AI로 해결하는 방법. 어느 서비스에 뭐라고 입력하는지까지 구체적으로
 3단락) 이렇게 하면 — 얻는 결과나 절약되는 시간
-4줄째) 팔로우 이유 한 줄 — 광고처럼 들리지 않게 담백한 한 문장
-  (예: "AI 어렵지 않게 풀어드리는 이야기, 계속 올릴게요")
+4줄째) 마지막 줄은 정확히 이 문장으로 마무리하세요: "{closing_line}"
   "팔로우 해주세요" 같은 직접적인 요청은 쓰지 않습니다
 
 [첫 줄 — 가장 중요]
@@ -706,7 +741,7 @@ def main():
             text, extra_comments, _has_kw = write_prompt_post(state, now_kst)
             content_type = "prompt"
         else:
-            text = write_howto_post(now_kst)
+            text = write_howto_post(state, now_kst)
             content_type = "howto"
 
     print(f"[유형] {content_type}")
@@ -729,6 +764,7 @@ def main():
         state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)
     if content_type == "prompt":
         state["prompt_seq"] = state.get("prompt_seq", 0) + 1
+    state["cta_seq"] = state.get("cta_seq", 0) + 1
     save_posted(state)
 
 

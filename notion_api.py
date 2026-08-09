@@ -80,9 +80,12 @@ def has_keyword(keyword):
         return False
     try:
         pages = get_pages()
-    except Exception:
+    except Exception as e:
+        print(f"[키워드 확인] '{keyword}' 노션 DB 조회 실패({e}) → False로 간주")
         return False
-    return any(p.get("keyword") == keyword for p in pages)
+    result = any(p.get("keyword") == keyword for p in pages)
+    print(f"[키워드 확인] '{keyword}' 노션 DB 조회 → {result}")
+    return result
 
 
 def match_page(comment_text, pages):
