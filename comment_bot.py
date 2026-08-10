@@ -72,12 +72,15 @@ def main():
             if not page:
                 continue
 
+            if not page.get("public_url"):
+                print(f"  [경고] '{page['title']}' 게시 꺼짐 → 전송 스킵. 노션에서 공유>게시를 켜주세요")
+                continue
+
             if reply_budget <= 0:
                 print("  [상한 도달] 이번 회차 답장 상한에 도달, 나머지는 다음 회차에 처리")
                 break
 
-            template = random.choice(config.REPLY_TEMPLATES)  # 문구 랜덤 변형
-            reply_text = template.format(title=page["title"], url=page["url"])
+            reply_text = config.REPLY_TEMPLATE.format(title=page["title"], link=page["public_url"])
             try:
                 threads_api.publish_text(reply_text, reply_to_id=cid, wait_seconds=8)
                 replied.add(cid)
@@ -95,4 +98,6 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+
     main()
