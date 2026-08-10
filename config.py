@@ -18,13 +18,21 @@ NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "")
 
 # ── 선택 값 (기본값 있음) ────────────────────────────────────
-# 노션 페이지에 키워드가 지정 안 된 경우, 이 단어가 댓글에 있으면 최신 페이지를 보냄
+# 구체적인 자료 키워드가 매칭되지 않고 이 단어만 댓글에 있으면 허브 페이지(NOTION_HUB_TITLE)를 보냄
 DEFAULT_KEYWORD = os.environ.get("DEFAULT_KEYWORD", "신청")
 
-# 자동 대댓글 문구. {title}=노션 페이지 제목, {url}=노션 링크
+# 기본 키워드만 매칭됐을 때 대신 보낼 허브 페이지의 노션 제목.
+# 이 이름과 정확히 같은 페이지를 노션 DB에서 찾아 링크를 보낸다. 못 찾으면 아무것도 안 보냄
+NOTION_HUB_TITLE = os.environ.get("NOTION_HUB_TITLE", "AI 프롬프트 5종 모음")
+
+# 자동 대댓글 문구. {title}=자료 제목, {link}=노션 공개 게시 링크(public_url)
 REPLY_TEMPLATE = os.environ.get(
     "REPLY_TEMPLATE",
-    "요청하신 자료 보내드려요 😊\n📎 {title}\n{url}",
+    "{title} 여기 있어요 :)\n"
+    "{link}\n"
+    "\n"
+    "로그인 없이 바로 보실 수 있어요.\n"
+    "팔로우해두시면 새 프롬프트 올라올 때 놓치지 않으세요!",
 )
 
 # 최근 게시물 몇 개까지 댓글을 감시할지
@@ -43,16 +51,6 @@ MAX_REPLIES_PER_RUN = int(os.environ.get("MAX_REPLIES_PER_RUN", "4"))
 
 # 답장 사이 대기 시간 범위(초)
 REPLY_GAP_SECONDS = (20, 50)
-
-# 대댓글 문구 랜덤 변형 목록 ({title}, {url} 사용)
-REPLY_TEMPLATES = [
-    "요청하신 자료 보내드려요 😊\n📎 {title}\n{url}",
-    "확인했어요! 아래 링크에서 받아가세요 🙌\n{title}\n{url}",
-    "감사합니다 :) 요청하신 「{title}」 여기 있어요!\n{url}",
-    "네! 자료 전달드립니다 📎\n{title}\n{url}",
-    "댓글 감사해요 😊 「{title}」 링크 남겨드려요\n{url}",
-    "여기요! 도움 되셨으면 좋겠어요 🙏\n📎 {title}\n{url}",
-]
 
 THREADS_API_BASE = "https://graph.threads.net/v1.0"
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state", "replied.json")
