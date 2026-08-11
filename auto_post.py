@@ -43,6 +43,7 @@ POSTED_LOG_FILE = os.path.join(os.path.dirname(__file__), "data", "posted_log.cs
 POSTED_LOG_COLUMNS = [
     "date_kst", "post_type", "topic", "keyword", "cta_id", "queue_left", "thread_id", "is_draft",
 ]
+TOPIC_DOC_FILE = os.path.join(os.path.dirname(__file__), "docs", "글감_발행목록.md")
 
 # 발행 시간대 정의 (KST 기준)
 PRIMARY_HOURS = (7, 8, 9)      # 07:00 ~ 09:59
@@ -146,6 +147,49 @@ def append_posted_log(row):
         if not file_exists:
             writer.writeheader()
         writer.writerow({col: row.get(col, "") for col in POSTED_LOG_COLUMNS})
+
+
+def _read_posted_log_rows():
+    if not os.path.exists(POSTED_LOG_FILE):
+        return []
+    with open(POSTED_LOG_FILE, "r", encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def update_topic_doc(state, now_kst):
+    """docs/글감_발행목록.md를 현재 OPEN/LEAD 큐 상태로 다시 써준다.
+
+    노션 DB 조회에 실패해도 발행 자체는 막지 않도록 예외를 삼키고 건너뛴다.
+    """
+    try:
+        pages = notion_api.get_pages()
+    except Exception as e:
+        print(f"[글감목록] 노션 DB 조회 실패({e}) → 문서 갱신 건너뜀")
+        return
+
+    registered_keywords = set()
+    lead_keywords = set()
+    for p in pages:
+        registered_keywords.update(p.get("keywords", []))
+        if p.get("public_url"):
+            lead_keywords.update(p.get("keywords", []))
+
+    published_keywords = set(state.get("published_keywords", []))
+    published_log = [
+        row for row in _read_posted_log_rows()
+        if row.get("post_type") in ("open", "lead") and row.get("keyword")
+    ]
+
+    md = prompt_queue.render_topic_doc(
+        PROMPT_BANK, AREAS, lead_keywords, registered_keywords, published_keywords,
+        generated_at=now_kst.strftime("%Y-%m-%d %H:%M KST"),
+        published_log=published_log,
+    )
+
+    os.makedirs(os.path.dirname(TOPIC_DOC_FILE), exist_ok=True)
+    with open(TOPIC_DOC_FILE, "w", encoding="utf-8") as f:
+        f.write(md)
+    print("[글감목록] docs/글감_발행목록.md 갱신 완료")
 
 
 # ── 마무리 문구 선택 ─────────────────────────────────────────
@@ -1004,6 +1048,7 @@ def main():
         "thread_id": post_id,
         "is_draft": False,
     })
+    update_topic_doc(state, now_kst)
 
     if content_type == "prompt":
         for i, c in enumerate(extra_comments, start=2):
