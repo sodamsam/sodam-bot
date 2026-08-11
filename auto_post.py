@@ -20,6 +20,7 @@ GitHub Actions가 1순위 시간대(07~09시 KST) 동안 20분마다 실행하�
   - 모든 글 마지막 줄에 담백한 팔로우 이유 한 줄을 넣어 전환율을 높인다
   - 부드러운 존댓말, 4050 독자 눈높이에 맞춘 쉬운 말
 """
+import csv
 import hashlib
 import json
 import os
@@ -38,6 +39,10 @@ import threads_api
 
 KST = ZoneInfo("Asia/Seoul")
 POSTED_FILE = os.path.join(os.path.dirname(__file__), "state", "posted.json")
+POSTED_LOG_FILE = os.path.join(os.path.dirname(__file__), "data", "posted_log.csv")
+POSTED_LOG_COLUMNS = [
+    "date_kst", "post_type", "topic", "keyword", "cta_id", "queue_left", "thread_id", "is_draft",
+]
 
 # 발행 시간대 정의 (KST 기준)
 PRIMARY_HOURS = (7, 8, 9)      # 07:00 ~ 09:59
@@ -126,6 +131,21 @@ def save_posted(state):
     state["posted"] = {k: state["posted"][k] for k in keys}
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def append_posted_log(row):
+    """발행할 때마다 data/posted_log.csv에 한 줄 추가한다 (효과 측정용).
+
+    파일이 없으면 헤더와 함께 새로 만든다. open/lead가 아닌 유형(benefit/howto)은
+    topic 정도만 채워지고 keyword/cta_id/queue_left는 빈 값으로 남는다.
+    """
+    os.makedirs(os.path.dirname(POSTED_LOG_FILE), exist_ok=True)
+    file_exists = os.path.exists(POSTED_LOG_FILE)
+    with open(POSTED_LOG_FILE, "a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=POSTED_LOG_COLUMNS)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({col: row.get(col, "") for col in POSTED_LOG_COLUMNS})
 
 
 # ── 마무리 문구 선택 ─────────────────────────────────────────
@@ -973,6 +993,17 @@ def main():
 
     post_id = threads_api.publish_text(text)
     print(f"[발행 완료] post id: {post_id}")
+
+    append_posted_log({
+        "date_kst": now_kst.isoformat(),
+        "post_type": content_type,
+        "topic": (queue_result or {}).get("topic", ""),
+        "keyword": (queue_result or {}).get("keyword", ""),
+        "cta_id": (queue_result or {}).get("cta_idx", ""),
+        "queue_left": (queue_result or {}).get("queue_left", ""),
+        "thread_id": post_id,
+        "is_draft": False,
+    })
 
     if content_type == "prompt":
         for i, c in enumerate(extra_comments, start=2):
