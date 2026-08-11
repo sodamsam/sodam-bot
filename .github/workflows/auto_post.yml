@@ -16,6 +16,14 @@ on:
         options:
           - ""
           - force
+      post_type:
+        description: "비워두면 평소처럼 혜택/요일 자동 판단, open 또는 lead를 넣으면 그 타입으로 강제 발행(테스트용)"
+        required: false
+        type: choice
+        options:
+          - ""
+          - open
+          - lead
 
 permissions:
   contents: write
@@ -47,13 +55,18 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           FORCE_WINDOW: ${{ inputs.force_window }}
+          POST_TYPE: ${{ inputs.post_type }}
         run: python auto_post.py
 
       - name: 발행 기록 저장
         run: |
           git config user.name "auto-post-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add state/posted.json
+          for f in state/posted.json state/last_cta.json data/posted_log.csv docs/글감_발행목록.md; do
+            if [ -f "$f" ]; then
+              git add "$f"
+            fi
+          done
           if ! git diff --cached --quiet; then
             git commit -m "봇: 발행 기록 업데이트"
             git pull --rebase origin ${{ github.ref_name }} || true
