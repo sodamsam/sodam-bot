@@ -108,6 +108,27 @@ def has_keyword(keyword):
     return result
 
 
+def get_lead_ready_keywords():
+    """LEAD 큐에 쓸 수 있는 키워드 집합을 반환한다.
+
+    노션 자료 DB에 등록만 되어 있는 게 아니라 "웹에 게시(Publish)"까지 켜져
+    public_url이 실제로 나오는 페이지의 키워드만 모은다. 게시가 안 된 페이지의
+    키워드를 LEAD로 내보내면 신청받을 자료가 없는데 신청 유도만 하게 되므로 제외한다.
+    조회 실패 시에는 빈 집합으로 간주한다(LEAD 큐 없음 → OPEN으로 폴백됨).
+    """
+    try:
+        pages = get_pages()
+    except Exception as e:
+        print(f"[LEAD 키워드 확인] 노션 DB 조회 실패({e}) → 빈 집합으로 간주")
+        return set()
+    keywords = set()
+    for p in pages:
+        if p.get("public_url"):
+            keywords.update(p.get("keywords", []))
+    print(f"[LEAD 키워드 확인] 공개 발행된 키워드: {sorted(keywords)}")
+    return keywords
+
+
 def has_any_material():
     """봇 자료 DB에 자료가 하나라도 있는지 확인. 실패 시 False로 간주."""
     try:
