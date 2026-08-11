@@ -26,14 +26,17 @@ import os
 import re
 import time
 import datetime
+from zoneinfo import ZoneInfo
 import requests
 import feedparser
 
 import config
+import cta
 import notion_api
+import prompt_queue
 import threads_api
 
-KST = datetime.timezone(datetime.timedelta(hours=9))
+KST = ZoneInfo("Asia/Seoul")
 POSTED_FILE = os.path.join(os.path.dirname(__file__), "state", "posted.json")
 
 # 발행 시간대 정의 (KST 기준)
@@ -585,6 +588,37 @@ PROMPT_BANK = {
 }
 AREAS = ["office", "biz", "life"]
 
+# 요일별 아침 발행 타입 — 월요일=0 ... 일요일=6 (파이썬 datetime.weekday() 기준)
+# OPEN(주 4일: 월화목금) = 프롬프트 전문 공개, LEAD(주 3일: 수토일) = 맛보기+신청 유도
+# 소담쌤이 나중에 요일 배분을 바꾸고 싶으면 이 딕셔너리만 고치면 된다.
+WEEKDAY_TYPE_MAP = {
+    0: "open",   # 월
+    1: "open",   # 화
+    2: "lead",   # 수
+    3: "open",   # 목
+    4: "open",   # 금
+    5: "lead",   # 토
+    6: "lead",   # 일
+}
+_WEEKDAY_NAMES_KO = ["월", "화", "수", "목", "금", "토", "일"]
+
+
+def determine_prompt_type(now_kst):
+    """오늘 아침 발행이 OPEN인지 LEAD인지 정한다.
+
+    POST_TYPE 환경변수가 open/lead로 지정돼 있으면 요일과 무관하게 그 값을 강제로 쓴다
+    (테스트용). 지정이 없으면 KST 기준 오늘 요일로 WEEKDAY_TYPE_MAP을 따른다.
+    """
+    forced = os.environ.get("POST_TYPE", "").strip().lower()
+    if forced in ("open", "lead"):
+        print(f"[타입 강제 지정] POST_TYPE={forced}")
+        return forced
+    weekday = now_kst.weekday()
+    post_type = WEEKDAY_TYPE_MAP[weekday]
+    print(f"[타입 결정] {_WEEKDAY_NAMES_KO[weekday]}요일 → {post_type.upper()} 타입")
+    return post_type
+
+
 _PROMPT_QUALITY_RULES = """[프롬프트 품질 규칙 — 반드시 지킬 것]
 - 각 프롬프트는 6줄 이내, 그대로 복사해 쓸 수 있는 완성형 문장으로 작성
 - 사용자가 바꿔 넣을 자리는 반드시 [여기에 회의 내용 붙여넣기]처럼 대괄호로 표시
@@ -646,6 +680,8 @@ def _gen_prompt_bundle(topic, closing_line):
     return _call_gemini(prompt)
 
 
+# v2.3부터 아침 발행은 write_queued_prompt_post()(OPEN/LEAD 큐)로 대체됨.
+# main()에서는 더 이상 호출하지 않지만, 롤백 대비로 함수와 테스트를 그대로 남겨둔다.
 def write_prompt_post(state, now_kst):
     """프롬프트 나눔 글을 작성한다. (본문, 댓글로 이어붙일 프롬프트 목록, 키워드 매칭 여부) 반환."""
     seq = state.get("prompt_seq", 0)
@@ -675,6 +711,146 @@ def write_prompt_post(state, now_kst):
 
     print(f"[프롬프트] 영역={area} 주제={topic} 키워드매칭={has_kw}")
     return text, extra_comments, has_kw
+
+
+# ── 아침 발행: OPEN/LEAD 글감 큐 ('open' / 'lead') ─────────────
+
+def _gen_open_post(topic, closing_line):
+    """OPEN 글(프롬프트 전문 공개)의 재료(후킹/프롬프트 전문/예시)를 Gemini로 생성한다."""
+    prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
+
+{PERSONA}
+
+오늘의 프롬프트 나눔 주제: "{topic}"
+
+{_PROMPT_QUALITY_RULES}
+
+[출력 형식 — 반드시 아래 마커를 정확히 그대로 사용]
+[후킹]
+(이 프롬프트가 필요한 문제 상황을 짚는 한 줄. 25자 이내, 배경 설명 없이 바로)
+[프롬프트]
+(위 품질 규칙을 지킨, 그대로 복사해 쓸 수 있는 완성형 프롬프트 본문)
+[예시]
+(이 프롬프트를 쓰면 실제로 어떤 결과가 나오는지 2~3줄 예시. 과장 없이 담백하게)
+
+[어조 규칙]
+- 부드러운 존댓말, 명령·경고·과장 금지
+- 질문으로 끝내지 않습니다
+
+마커 외의 다른 설명·따옴표는 출력하지 마세요."""
+    raw = _call_gemini(prompt)
+    parts = _split_markers(raw, ("후킹", "프롬프트", "예시"))
+
+    hook = parts["후킹"].strip() or topic
+    prompt_body = parts["프롬프트"].strip() or raw
+    example = parts["예시"].strip() or "(예시 생략)"
+
+    text = (
+        f"{hook}\n\n"
+        "이거 그대로 복사해서 쓰세요 👇\n\n"
+        "━━━━━━━━━━\n"
+        f"{prompt_body}\n"
+        "━━━━━━━━━━\n\n"
+        "이렇게 나와요:\n"
+        f"{example}\n\n"
+        f"{closing_line}"
+    )
+    return _finalize(text, max_blocks=6)
+
+
+def _gen_lead_post(topic, closing_line):
+    """LEAD 글(맛보기+신청 유도)의 재료(후킹/필요한 이유/맛보기)를 Gemini로 생성한다."""
+    prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
+
+{PERSONA}
+
+오늘의 프롬프트 나눔 주제: "{topic}"
+
+이 주제로 "맛보기" 글을 씁니다. 전체 프롬프트를 다 공개하지 않고, 필요성과
+핵심 일부만 보여줘서 "전체본을 받고 싶다"는 마음이 들게 씁니다.
+
+[출력 형식 — 반드시 아래 마커를 정확히 그대로 사용]
+[후킹]
+(독자 상황을 짚는 한 줄. 25자 이내)
+[이유]
+(이 프롬프트/자료가 왜 필요한지 2~3줄)
+[맛보기]
+(핵심 내용의 아주 일부만 3줄. 전문을 주지 않고 일부러 궁금하게 남깁니다)
+
+[어조 규칙]
+- 부드러운 존댓말, 명령·경고·과장 금지
+- 질문으로 끝내지 않습니다
+- 전문용어 금지, 컴퓨터를 잘 모르는 사람도 읽을 수 있는 말로
+
+마커 외의 다른 설명·따옴표는 출력하지 마세요."""
+    raw = _call_gemini(prompt)
+    parts = _split_markers(raw, ("후킹", "이유", "맛보기"))
+
+    hook = parts["후킹"].strip() or topic
+    reason = parts["이유"].strip()
+    teaser = parts["맛보기"].strip()
+
+    text = f"{hook}\n\n{reason}\n\n{teaser}\n\n{closing_line}"
+    return _finalize(text, max_blocks=6)
+
+
+def write_queued_prompt_post(state, now_kst, forced_type=None):
+    """OPEN/LEAD 큐에서 오늘 쓸 글감을 뽑아 글을 작성한다.
+
+    LEAD 요일인데 LEAD 큐가 비어 있으면 OPEN으로 자동 대체하고 경고 로그를 남긴다.
+    반환: {"text", "post_type", "topic", "keyword", "cta_idx", "queue_left"}
+    """
+    prompt_queue.migrate_legacy_published_keywords(state, PROMPT_BANK, AREAS)
+
+    post_type = forced_type or determine_prompt_type(now_kst)
+
+    lead_keywords = notion_api.get_lead_ready_keywords()
+    published = set(state.get("published_keywords", []))
+    queues = prompt_queue.build_queues(PROMPT_BANK, AREAS, lead_keywords, published)
+
+    if post_type == "lead" and not queues["lead_remaining"]:
+        print("[경고] LEAD 큐가 비어 OPEN으로 대체 발행합니다. Notion 자료 추가 필요")
+        post_type = "open"
+
+    seq_key = f"{post_type}_seq"
+    seq = state.get(seq_key, 0)
+
+    if post_type == "lead":
+        item, left, _wrapped = prompt_queue.pick_from_queue(
+            queues["lead_all"], queues["lead_remaining"], seq, "LEAD")
+    else:
+        item, left, _wrapped = prompt_queue.pick_from_queue(
+            queues["open_all"], queues["open_remaining"], seq, "OPEN")
+
+    if item is None:
+        raise RuntimeError(f"[{post_type.upper()} 큐] 글감이 하나도 없습니다. PROMPT_BANK 구성을 확인하세요")
+
+    if post_type == "lead" and left <= 3:
+        print(f"[알림] LEAD 큐 잔여 {left}개. Notion 자료를 보충하세요")
+
+    weekday_name = _WEEKDAY_NAMES_KO[now_kst.weekday()]
+    print(f"[아침발행] {weekday_name}요일 → {post_type.upper()} 타입 / "
+          f"글감: {item['topic']} / {post_type.upper()} 큐 잔여 {left}개")
+
+    closing_line, cta_idx = cta.pick_cta(post_type, keyword=item["keyword"])
+
+    if post_type == "open":
+        text = _gen_open_post(item["topic"], closing_line)
+    else:
+        text = _gen_lead_post(item["topic"], closing_line)
+
+    state[seq_key] = seq + 1
+    published.add(item["keyword"])
+    state["published_keywords"] = sorted(published)
+
+    return {
+        "text": text,
+        "post_type": post_type,
+        "topic": item["topic"],
+        "keyword": item["keyword"],
+        "cta_idx": cta_idx,
+        "queue_left": left,
+    }
 
 
 # ── 업무 활용법 ('howto') ─────────────────────────────────────
@@ -764,23 +940,33 @@ def main():
     content_type = None
     text = None
     extra_comments = []
+    queue_result = None  # open/lead일 때만 채워짐 (발행 기록용 topic/keyword/cta_idx/queue_left)
 
-    benefit_item = pick_benefit_item(date_str)
-    if benefit_item:
-        benefit_text = write_benefit_post(benefit_item, now_kst)
-        if benefit_text:
-            content_type = "benefit"
-            text = benefit_text
-            state["used_titles"].append(benefit_item["title"])
+    forced_prompt_type = os.environ.get("POST_TYPE", "").strip().lower()
+    if forced_prompt_type in ("open", "lead"):
+        # 테스트/수동 지정 목적: 혜택·업무활용법 판단을 건너뛰고 곧장 OPEN/LEAD로 발행
+        print(f"[강제 지정] POST_TYPE={forced_prompt_type} — 혜택/활용법 판단 없이 곧장 진행")
+        queue_result = write_queued_prompt_post(state, now_kst, forced_type=forced_prompt_type)
+        text = queue_result["text"]
+        content_type = queue_result["post_type"]
+    else:
+        benefit_item = pick_benefit_item(date_str)
+        if benefit_item:
+            benefit_text = write_benefit_post(benefit_item, now_kst)
+            if benefit_text:
+                content_type = "benefit"
+                text = benefit_text
+                state["used_titles"].append(benefit_item["title"])
 
-    if not content_type:
-        kind = POST_CYCLE[state["cycle_index"] % len(POST_CYCLE)]
-        if kind == "prompt":
-            text, extra_comments, _has_kw = write_prompt_post(state, now_kst)
-            content_type = "prompt"
-        else:
-            text = write_howto_post(state, now_kst)
-            content_type = "howto"
+        if not content_type:
+            kind = POST_CYCLE[state["cycle_index"] % len(POST_CYCLE)]
+            if kind == "prompt":
+                queue_result = write_queued_prompt_post(state, now_kst)
+                text = queue_result["text"]
+                content_type = queue_result["post_type"]
+            else:
+                text = write_howto_post(state, now_kst)
+                content_type = "howto"
 
     print(f"[유형] {content_type}")
     print(f"[초안] {text[:80]}...")
