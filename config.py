@@ -25,14 +25,13 @@ DEFAULT_KEYWORD = os.environ.get("DEFAULT_KEYWORD", "신청")
 # 이 이름과 정확히 같은 페이지를 노션 DB에서 찾아 링크를 보낸다. 못 찾으면 아무것도 안 보냄
 NOTION_HUB_TITLE = os.environ.get("NOTION_HUB_TITLE", "AI 프롬프트 5종 모음")
 
-# 자동 대댓글 문구. {title}=자료 제목, {link}=노션 공개 게시 링크(public_url)
+# 자동 대댓글 기본 문구. {title}=자료 제목, {link}=노션 공개 게시 링크(public_url)
+# "팔로우해주세요" 같은 직접 요청 문구는 넣지 않는다 — 요청이 아니라 안내가 원칙.
+# 처음 요청하는 사람에게만 comment_bot.FIRST_TIME_NOTE_LINES 중 한 줄이 추가로 붙는다.
 REPLY_TEMPLATE = os.environ.get(
     "REPLY_TEMPLATE",
-    "{title} 여기 있어요 :)\n"
-    "{link}\n"
-    "\n"
-    "로그인 없이 바로 보실 수 있어요.\n"
-    "팔로우해두시면 새 프롬프트 올라올 때 놓치지 않으세요!",
+    "{title} 여기 있습니다 👇\n"
+    "{link}",
 )
 
 # 최근 게시물 몇 개까지 댓글을 감시할지
