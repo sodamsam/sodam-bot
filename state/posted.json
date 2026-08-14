@@ -110,6 +110,11 @@
       "time": "2026-08-14T07:00:36.453802+09:00",
       "post_id": "17905629711468987",
       "type": "open"
+    },
+    "2026-08-15": {
+      "time": "2026-08-15T07:00:44.753371+09:00",
+      "post_id": "18066251123574136",
+      "type": "lead"
     }
   },
   "used_titles": [
@@ -204,9 +209,9 @@
     "철강·석유화학 등 주력산업 AI 제조 혁신…잠재성장률 높인다",
     "이상일 용인특례시장, 베트남 다낭 콘퍼런스서 AI 활용한 시민 생활지원 정책 소개"
   ],
-  "cycle_index": 0,
+  "cycle_index": 1,
   "prompt_seq": 4,
-  "cta_seq": 5,
+  "cta_seq": 6,
   "material_check": {
     "date": "2026-08-13",
     "has_material": true
@@ -216,8 +221,10 @@
     "상세",
     "소개",
     "식단",
+    "장보기",
     "회의"
   ],
   "published_keywords_migrated": true,
-  "open_seq": 1
+  "open_seq": 1,
+  "lead_seq": 1
 }
