@@ -68,21 +68,12 @@ PERSONA = """[계정 정체성 — 소담 AI 랩 (@sodam_ai_lab)]
 # 7일 주기 순환 큐 — 요일에 고정하지 않아 발행이 누락돼도 순서만 밀리고 깨지지 않는다.
 POST_CYCLE = ["prompt", "prompt", "howto", "prompt", "prompt", "howto", "prompt"]
 
-INSTAGRAM_HANDLE = "sodam_ai_lab"
-
 # 프롬프트/업무활용 글에서 키워드 댓글 퍼널이 없을 때 쓰는 마무리 문구 풀
 # "이런 프롬프트 계속 올려요"는 매번 반복되어 뻔해 보이므로 제외한다.
 GENERIC_FOLLOW_LINES = [
     "AI 어렵지 않게 풀어드리는 이야기, 계속 올릴게요",
     "이런 활용법 매일 정리해서 올려요",
     "다음에도 바로 써먹을 수 있는 걸로 가져올게요",
-]
-
-# 가끔 섞어 넣는 인스타 유도 문구 풀
-INSTAGRAM_CTA_LINES = [
-    f"카드로 더 보기 편하게 정리해서 인스타 {INSTAGRAM_HANDLE}에도 올려요",
-    f"인스타 {INSTAGRAM_HANDLE}에 카드뉴스로 한눈에 정리해뒀어요",
-    f"더 깔끔하게 보고 싶으시면 인스타 {INSTAGRAM_HANDLE}도 있어요",
 ]
 
 # benefit 글은 기사 내용에 맞춰 Gemini가 팔로우 이유를 직접 쓰므로 이 문구는
@@ -118,6 +109,7 @@ def load_posted():
         data = {}
     data.setdefault("posted", {})
     data.setdefault("used_titles", [])
+    data.setdefault("howto_used", [])
     data.setdefault("cycle_index", 0)
     data.setdefault("prompt_seq", 0)
     data.setdefault("cta_seq", 0)
@@ -208,7 +200,7 @@ def pick_closing_line(post_type, has_keyword, keyword, cta_seq, has_material):
     """마무리 문구를 결정한다. 우선순위:
     1) 정확 키워드 매칭 댓글 퍼널 (최우선)
     2) benefit 고정 문구
-    3) 신청 만능 유도 / 인스타 유도 / 일반 문구 — cta_seq % 3으로 3분의 1씩 순환
+    3) 신청 만능 유도 / 일반 문구 — cta_seq % 2로 절반씩 순환
        (신청 유도는 자료 DB가 비어있으면 일반 문구로 대체)"""
     if post_type == "prompt" and has_keyword:
         line_type = "정확매칭"
@@ -217,16 +209,13 @@ def pick_closing_line(post_type, has_keyword, keyword, cta_seq, has_material):
         line_type = "혜택"
         line = BENEFIT_FOLLOW_LINE
     else:
-        choice = cta_seq % 3
+        choice = cta_seq % 2
         if choice == 0 and has_material:
             line_type = "신청유도"
-            line = APPLY_CTA_LINES[(cta_seq // 3) % len(APPLY_CTA_LINES)]
-        elif choice == 1:
-            line_type = "인스타유도"
-            line = INSTAGRAM_CTA_LINES[(cta_seq // 3) % len(INSTAGRAM_CTA_LINES)]
+            line = APPLY_CTA_LINES[(cta_seq // 2) % len(APPLY_CTA_LINES)]
         else:
             line_type = "일반문구"
-            line = GENERIC_FOLLOW_LINES[(cta_seq // 3) % len(GENERIC_FOLLOW_LINES)]
+            line = GENERIC_FOLLOW_LINES[(cta_seq // 2) % len(GENERIC_FOLLOW_LINES)]
 
     print(f"[마무리 문구 선택] 유형={line_type} (cta_seq={cta_seq}, 자료 존재={has_material})")
     return line
@@ -901,11 +890,65 @@ def write_queued_prompt_post(state, now_kst, forced_type=None):
 
 # ── 업무 활용법 ('howto') ─────────────────────────────────────
 
+def _upcoming_open_lead_counts(now_kst, days=7):
+    """내일부터 `days`일 동안 OPEN/LEAD 요일이 각각 며칠 있는지 센다.
+
+    7일 창에는 모든 요일이 정확히 한 번씩 들어가므로, WEEKDAY_TYPE_MAP 배분이
+    바뀌지 않는 한 결과는 항상 고정(LEAD 3일/OPEN 4일)이다. POST_CYCLE에서
+    그중 일부가 howto로 빠질 수 있다는 점은 고려하지 않아 다소 넉넉하게(안전하게)
+    예약하게 된다.
+    """
+    counts = {"open": 0, "lead": 0}
+    for i in range(1, days + 1):
+        weekday = (now_kst + datetime.timedelta(days=i)).weekday()
+        counts[WEEKDAY_TYPE_MAP[weekday]] += 1
+    return counts
+
+
+def _pick_howto_candidate(state, now_kst, all_topics):
+    """howto 후보를 published_keywords / howto_used / 앞으로 7일 안에 OPEN·LEAD로
+    나갈 큐 잔여 키워드와 안 겹치게 좁혀서 고른다.
+
+    후보가 하나도 안 남으면 howto_used만 초기화하고 다시 좁힌다(published_keywords와
+    7일 예약분은 계속 제외). 그래도 없으면 크래시를 막기 위해 전체 목록에서 고른다.
+    """
+    published = set(state.get("published_keywords", []))
+
+    lead_keywords = notion_api.get_lead_ready_keywords()
+    queues = prompt_queue.build_queues(PROMPT_BANK, AREAS, lead_keywords, published)
+
+    counts = _upcoming_open_lead_counts(now_kst)
+    reserved = {t["keyword"] for t in queues["lead_remaining"][: counts["lead"]]} | \
+        {t["keyword"] for t in queues["open_remaining"][: counts["open"]]}
+
+    howto_used = set(state.get("howto_used", []))
+    candidates = [
+        t for t in all_topics
+        if t[1] not in published and t[1] not in howto_used and t[1] not in reserved
+    ]
+
+    if not candidates:
+        print("[알림] howto 후보가 소진되어 howto_used를 초기화하고 다시 고릅니다")
+        state["howto_used"] = []
+        candidates = [
+            t for t in all_topics
+            if t[1] not in published and t[1] not in reserved
+        ]
+
+    if not candidates:
+        print("[경고] howto 후보가 하나도 없어 제외 규칙 없이 전체 글감에서 고릅니다")
+        candidates = all_topics
+
+    return candidates
+
+
 def write_howto_post(state, now_kst):
     date_str = now_kst.strftime("%Y-%m-%d")
-    seed = int(hashlib.sha256(f"{date_str}-howto".encode()).hexdigest(), 16)
     all_topics = [t for area in AREAS for t in PROMPT_BANK[area]]
-    topic, _keyword = all_topics[seed % len(all_topics)]
+    candidates = _pick_howto_candidate(state, now_kst, all_topics)
+
+    seed = int(hashlib.sha256(f"{date_str}-howto".encode()).hexdigest(), 16)
+    topic, keyword = candidates[seed % len(candidates)]
 
     hook_seed = int(hashlib.sha256(f"{date_str}-howto-hook".encode()).hexdigest(), 16)
     hook = HOOK_PATTERNS[hook_seed % len(HOOK_PATTERNS)]
@@ -954,7 +997,7 @@ def write_howto_post(state, now_kst):
 - 게시글 본문만 출력 (설명·따옴표 없이)"""
 
     text = _call_gemini(prompt)
-    return _finalize(text, max_blocks=4)
+    return {"text": _finalize(text, max_blocks=4), "keyword": keyword}
 
 
 # ── 메인 ─────────────────────────────────────────────────────
@@ -987,6 +1030,7 @@ def main():
     text = None
     extra_comments = []
     queue_result = None  # open/lead일 때만 채워짐 (발행 기록용 topic/keyword/cta_idx/queue_left)
+    howto_keyword = None  # howto일 때만 채워짐 (발행 성공 시 howto_used에 기록)
 
     forced_prompt_type = os.environ.get("POST_TYPE", "").strip().lower()
     if forced_prompt_type in ("open", "lead"):
@@ -1011,7 +1055,9 @@ def main():
                 text = queue_result["text"]
                 content_type = queue_result["post_type"]
             else:
-                text = write_howto_post(state, now_kst)
+                howto_result = write_howto_post(state, now_kst)
+                text = howto_result["text"]
+                howto_keyword = howto_result["keyword"]
                 content_type = "howto"
 
     print(f"[유형] {content_type}")
@@ -1046,6 +1092,8 @@ def main():
         state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)
     if content_type == "prompt":
         state["prompt_seq"] = state.get("prompt_seq", 0) + 1
+    if content_type == "howto" and howto_keyword:
+        state.setdefault("howto_used", []).append(howto_keyword)
     state["cta_seq"] = state.get("cta_seq", 0) + 1
     save_posted(state)
 
