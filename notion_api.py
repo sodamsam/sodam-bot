@@ -130,14 +130,19 @@ def get_lead_ready_keywords():
 
 
 def has_any_material():
-    """봇 자료 DB에 자료가 하나라도 있는지 확인. 실패 시 False로 간주."""
+    """신청 CTA가 눌렸을 때 실제로 보낼 허브 페이지가 있는지 확인. 실패 시 False로 간주.
+
+    DB에 페이지가 있는지가 아니라, DEFAULT_KEYWORD 댓글에 match_page()가 실제로
+    페이지를 찾아 돌려주는지를 확인한다 (체크 대상 = 전송 대상, comment_bot.py와 동일 기준).
+    """
     try:
         pages = get_pages()
     except Exception as e:
         print(f"[자료 확인] 노션 DB 조회 실패({e}) → False로 간주")
         return False
-    result = len(pages) > 0
-    print(f"[자료 확인] 노션 DB 자료 개수={len(pages)} → {result}")
+    hub = match_page(config.DEFAULT_KEYWORD, pages)
+    result = hub is not None
+    print(f"[자료 확인] 허브 페이지 → {hub['title'] if hub else '없음'} = {result}")
     return result
 
 

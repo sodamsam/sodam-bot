@@ -93,6 +93,48 @@ def test_has_material_cached_per_day(monkeypatch):
     assert calls["n"] == 2  # 날짜가 바뀌면 재조회
 
 
+def _page(title, keywords):
+    return {"title": title, "url": "https://notion.so/x", "public_url": "https://x.notion.site/y", "keywords": keywords}
+
+
+def test_apply_cta_shown_when_hub_page_exists(monkeypatch):
+    """허브 페이지가 노션 DB에 있으면 has_any_material()이 True → 신청유도 CTA가 나온다."""
+    hub = _page(config.NOTION_HUB_TITLE, [])
+    monkeypatch.setattr(notion_api, "get_pages", lambda: [hub])
+
+    has_material = notion_api.has_any_material()
+    assert has_material is True
+
+    line = auto_post.pick_closing_line("howto", False, None, cta_seq=0, has_material=has_material)
+    assert line in auto_post.APPLY_CTA_LINES
+
+
+def test_apply_cta_hidden_when_no_pages_at_all(monkeypatch):
+    """DB에 페이지가 하나도 없으면 has_any_material()이 False → 신청유도 대신 일반 문구."""
+    monkeypatch.setattr(notion_api, "get_pages", lambda: [])
+
+    has_material = notion_api.has_any_material()
+    assert has_material is False
+
+    line = auto_post.pick_closing_line("howto", False, None, cta_seq=0, has_material=has_material)
+    assert line not in auto_post.APPLY_CTA_LINES
+    assert line in auto_post.GENERIC_FOLLOW_LINES
+
+
+def test_apply_cta_hidden_when_other_material_exists_but_no_hub(monkeypatch):
+    """다른 자료는 있어도 허브 페이지(DEFAULT_KEYWORD로 매칭될 페이지)가 없으면
+    has_any_material()은 False여야 한다 (체크 대상 = 실제 전송 대상)."""
+    others = [_page("식단 자료", ["식단"]), _page("장보기 자료", ["장보기"])]
+    monkeypatch.setattr(notion_api, "get_pages", lambda: others)
+
+    has_material = notion_api.has_any_material()
+    assert has_material is False
+
+    line = auto_post.pick_closing_line("howto", False, None, cta_seq=0, has_material=has_material)
+    assert line not in auto_post.APPLY_CTA_LINES
+    assert line in auto_post.GENERIC_FOLLOW_LINES
+
+
 def test_cta_seq_persists_across_save_and_load(tmp_path, monkeypatch):
     """cta_seq가 저장/로드 왕복 후에도 보존된다."""
     posted_file = tmp_path / "posted.json"

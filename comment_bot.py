@@ -80,7 +80,7 @@ def main():
         try:
             comments = threads_api.get_replies(post["id"])
         except Exception as e:
-            print(f"  [오류] 댓글 조회 실패 (post {post['id']}): {e}")
+            print(f"[댓글 조회 스킵] 게시물 {post['id']} 조회 실패 → 건너뜀 ({e})")
             continue
 
         for c in comments:

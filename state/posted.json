@@ -135,11 +135,6 @@
       "time": "2026-08-19T07:00:40.377735+09:00",
       "post_id": "18069803891481447",
       "type": "lead"
-    },
-    "2026-08-20": {
-      "time": "2026-08-20T07:00:37.195296+09:00",
-      "post_id": "18105550790268671",
-      "type": "howto"
     }
   },
   "used_titles": [
@@ -254,7 +249,5 @@
   "published_keywords_migrated": true,
   "open_seq": 2,
   "lead_seq": 3,
-  "howto_used": [
-    "매출"
-  ]
+  "howto_used": []
 }
