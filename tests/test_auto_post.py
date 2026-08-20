@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 
 import auto_post
+import cta
 import notion_api
 import threads_api
 import config
@@ -274,6 +275,10 @@ def _patch_common(monkeypatch, tmp_path, posted_data=None):
     if posted_data is not None:
         posted_file.write_text(json.dumps(posted_data, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(auto_post, "POSTED_FILE", str(posted_file))
+    # main()은 발행 성공 시 아래 세 실제 저장소 파일에도 쓰므로 함께 격리한다.
+    monkeypatch.setattr(auto_post, "POSTED_LOG_FILE", str(tmp_path / "posted_log.csv"))
+    monkeypatch.setattr(auto_post, "TOPIC_DOC_FILE", str(tmp_path / "글감_발행목록.md"))
+    monkeypatch.setattr(cta, "LAST_CTA_FILE", str(tmp_path / "last_cta.json"))
 
     monkeypatch.setattr(config, "THREADS_ACCESS_TOKEN", "fake-token")
     monkeypatch.setattr(config, "NOTION_TOKEN", "fake-token")

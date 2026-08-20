@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import auto_post
 import config
+import cta
 import notion_api
 import threads_api
 
@@ -52,6 +53,8 @@ def test_append_twice_only_one_header(tmp_path, monkeypatch):
 def test_main_appends_log_row_on_open_publish(tmp_path, monkeypatch):
     monkeypatch.setattr(auto_post, "POSTED_FILE", str(tmp_path / "posted.json"))
     monkeypatch.setattr(auto_post, "POSTED_LOG_FILE", str(tmp_path / "posted_log.csv"))
+    monkeypatch.setattr(auto_post, "TOPIC_DOC_FILE", str(tmp_path / "글감_발행목록.md"))
+    monkeypatch.setattr(cta, "LAST_CTA_FILE", str(tmp_path / "last_cta.json"))
     monkeypatch.setattr(config, "THREADS_ACCESS_TOKEN", "fake")
     monkeypatch.setattr(config, "NOTION_TOKEN", "fake")
     monkeypatch.setattr(config, "NOTION_DATABASE_ID", "fake")

@@ -127,6 +127,8 @@ def test_migration_runs_once_and_prompt_seq_untouched(monkeypatch):
 def test_main_post_type_open_skips_benefit_check(tmp_path, monkeypatch):
     posted_file = tmp_path / "posted.json"
     monkeypatch.setattr(auto_post, "POSTED_FILE", str(posted_file))
+    monkeypatch.setattr(auto_post, "POSTED_LOG_FILE", str(tmp_path / "posted_log.csv"))
+    monkeypatch.setattr(auto_post, "TOPIC_DOC_FILE", str(tmp_path / "글감_발행목록.md"))
     monkeypatch.setattr(config, "THREADS_ACCESS_TOKEN", "fake-token")
     monkeypatch.setattr(config, "NOTION_TOKEN", "fake-token")
     monkeypatch.setattr(config, "NOTION_DATABASE_ID", "fake-db")
