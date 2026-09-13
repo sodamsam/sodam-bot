@@ -71,3 +71,20 @@ def publish_text(text, reply_to_id=None, wait_seconds=None):
 def reply_to(post_id, text):
     """post_id 게시물(또는 댓글)에 내 계정으로 댓글을 단다."""
     return publish_text(text, reply_to_id=post_id, wait_seconds=8)
+
+
+def publish_image(image_url, text=None, wait_seconds=30):
+    """이미지(카드뉴스) 게시물 발행. image_url은 외부에서 접근 가능한 공개 URL이어야 한다.
+
+    3단계: (1) IMAGE 컨테이너 생성 → (2) 서버 처리 대기 → (3) 발행
+    """
+    params = {"media_type": "IMAGE", "image_url": image_url}
+    if text:
+        params["text"] = text
+    creation = _post("/me/threads", params)
+    creation_id = creation.get("id")
+    if not creation_id:
+        raise RuntimeError(f"이미지 컨테이너 생성 실패: {creation}")
+    time.sleep(wait_seconds)
+    result = _post("/me/threads_publish", {"creation_id": creation_id})
+    return result.get("id")

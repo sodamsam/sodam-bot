@@ -25,12 +25,14 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import time
 import datetime
 from zoneinfo import ZoneInfo
 import requests
 import feedparser
 
+import card_news
 import config
 import cta
 import notion_api
@@ -66,7 +68,8 @@ PERSONA = """[계정 정체성 — 소담 AI 랩 (@sodam_ai_lab)]
 - 독자를 가르치려 들지 않고, 함께 해보자고 권하는 태도"""
 
 # 7일 주기 순환 큐 — 요일에 고정하지 않아 발행이 누락돼도 순서만 밀리고 깨지지 않는다.
-POST_CYCLE = ["prompt", "prompt", "howto", "prompt", "prompt", "howto", "prompt"]
+# briefing(주 1회, AI 정책·브리핑 카드뉴스)이 howto 한 자리를 대신한다.
+POST_CYCLE = ["prompt", "prompt", "briefing", "prompt", "prompt", "howto", "prompt"]
 
 # 프롬프트/업무활용 글에서 키워드 댓글 퍼널이 없을 때 쓰는 마무리 문구 풀
 # "이런 프롬프트 계속 올려요"는 매번 반복되어 뻔해 보이므로 제외한다.
@@ -79,6 +82,9 @@ GENERIC_FOLLOW_LINES = [
 # benefit 글은 기사 내용에 맞춰 Gemini가 팔로우 이유를 직접 쓰므로 이 문구는
 # pick_closing_line()이 인스타 문구로 새지 않도록 막는 고정 기본값일 뿐이다.
 BENEFIT_FOLLOW_LINE = "이런 지원 놓치지 않게 계속 찾아서 올려요"
+
+# briefing(주 1회 AI 정책·브리핑 카드뉴스) 글의 고정 마무리 문구.
+BRIEFING_FOLLOW_LINE = "이런 소식, 매주 한 번씩 정리해서 알려드려요"
 
 # 정확한 키워드 매칭이 안 될 때, 신청 만능 키워드로 유도하는 문구 풀.
 # comment_bot.py의 DEFAULT_KEYWORD("신청") 로직과 짝을 이룬다:
@@ -208,6 +214,9 @@ def pick_closing_line(post_type, has_keyword, keyword, cta_seq, has_material):
     elif post_type == "benefit":
         line_type = "혜택"
         line = BENEFIT_FOLLOW_LINE
+    elif post_type == "briefing":
+        line_type = "브리핑"
+        line = BRIEFING_FOLLOW_LINE
     else:
         choice = cta_seq % 2
         if choice == 0 and has_material:
@@ -567,6 +576,154 @@ def find_fabrications(text, source_text):
             problems.append(org)
 
     return problems
+
+
+# ── AI 브리핑·정책 카드뉴스 ('briefing') — 주 1회 ─────────────
+
+BRIEFING_QUERIES = [
+    "정부 AI 정책 발표 when:6d",
+    "AI 규제 국회 when:6d",
+    "과기정통부 AI 정책 when:6d",
+    "개인정보보호위원회 AI when:7d",
+    "챗GPT 정책 변경 when:6d",
+    "AI 서비스 요금 변경 when:6d",
+    "생성형 AI 저작권 when:7d",
+    "AI 안전 기준 발표 when:7d",
+]
+
+
+def pick_briefing_item(date_str):
+    """이번 주 카드뉴스로 쓸 AI 정책·브리핑 소재 1건을 고른다. 마땅한 게 없으면 None."""
+    queries = _pick_queries(date_str, "briefing", BRIEFING_QUERIES, 4)
+    items = []
+    for q in queries:
+        items += fetch_news(q, 4)
+
+    seen = set()
+    dedup = []
+    for it in items:
+        if it["title"] in seen:
+            continue
+        seen.add(it["title"])
+        dedup.append(it)
+
+    if not dedup:
+        print("[브리핑] 이번 주 소재 없음 → howto로 대체")
+        return None
+
+    dedup.sort(key=lambda it: -(it.get("published_ts") or 0))
+    best = dedup[0]
+    print(f"[브리핑] 소재 선정: 「{best['title']}」")
+    return best
+
+
+def _gen_briefing_draft(item, extra_prompt=""):
+    prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
+
+{PERSONA}
+
+아래는 이번 주 나온 AI 정책·브리핑 관련 기사입니다. 기사에 실제로 적힌 내용만 사용해
+카드뉴스 이미지에 들어갈 짧은 제목과, 함께 올릴 스레드 게시글을 한국어로 작성하세요.
+기사에 없는 숫자·기관명·시행일은 절대 지어내지 않습니다.
+
+[기사]
+제목: {item['title']}
+요약: {item.get('summary', '')}
+
+[오늘의 코너: AI 브리핑]
+"이번 주 꼭 알아야 할 AI 소식·정책 변화를 쉽게 풀어주는 주간 코너"입니다.
+
+[출력 형식 — 반드시 아래 마커를 정확히 그대로 사용]
+[카드제목]
+(카드뉴스 이미지에 큼직하게 들어갈 한 줄. 18자 이내, 결과·변화를 담백하게 요약)
+[본문]
+(아래 구조의 스레드 게시글 본문)
+
+[본문 구조 — 반드시 이 순서로]
+1) 이 소식이 왜 나왔는지 한 줄
+2) 무엇이 달라지는지 — 기사에 있는 사실만
+3) 나(독자)에게 어떤 의미인지 — 실생활 관점에서 담백하게
+4) 마무리 이유 한 줄 — 정확히 이 문장으로: "{BRIEFING_FOLLOW_LINE}"
+
+[사실성 규칙 — 가장 중요, 절대 위반 금지]
+- 기사 제목과 요약에 실제로 적힌 숫자, 기관명, 날짜만 옮겨 적습니다
+- 기사에 없는 수치나 기관명, 시행일을 추측하거나 지어내지 않습니다
+
+[어조 규칙]
+- 부드럽고 친근한 존댓말, 명령·경고·과장·어그로 금지
+- 전문용어 금지, 컴퓨터를 잘 모르는 사람도 읽을 수 있는 말로
+- 질문으로 끝내지 않습니다
+
+[분량 규칙]
+- [본문] 전체 220~350자 (공백 포함)
+- 한 줄은 20자 이내로 끊어 씁니다. 단락 사이 빈 줄
+- 이모지는 딱 1개만, 해시태그·링크·인사말 금지
+{extra_prompt}"""
+    raw = _call_gemini(prompt)
+    parts = _split_markers(raw, ("카드제목", "본문"))
+    headline = (parts["카드제목"].strip() or item["title"])[:40]
+    body = parts["본문"].strip() or raw
+    return headline, _finalize(body, max_blocks=6)
+
+
+def write_briefing_post(item, now_kst):
+    """브리핑 카드뉴스 초안(카드 제목 + 본문)을 만들고 환각 검증을 2단으로 통과시킨다.
+
+    실패하면 None (호출부에서 howto로 대체).
+    """
+    source_text = f"{item['title']} {item.get('summary', '')}"
+
+    headline, text = _gen_briefing_draft(item)
+    problems = find_fabrications(text, source_text)
+    if not problems:
+        print("[브리핑 검증] 1차 통과")
+        return headline, text
+    print(f"[브리핑 검증] 1차 실패 — 문제: {problems}")
+
+    warn = f"""
+
+[경고 — 직전 시도에서 발견된 문제]
+아래 표현은 기사에 근거가 없습니다. 절대 다시 쓰지 마세요: {problems}
+숫자, 기관명, 날짜는 기사에 글자 그대로 적힌 것만 옮겨 적으세요. 기사에 없으면 언급하지 마세요."""
+    headline2, text2 = _gen_briefing_draft(item, extra_prompt=warn)
+    problems2 = find_fabrications(text2, source_text)
+    if not problems2:
+        print("[브리핑 검증] 2차 통과")
+        return headline2, text2
+
+    print(f"[브리핑 검증] 2차도 실패 — 문제: {problems2} → 브리핑 포기, howto로 대체")
+    return None
+
+
+def _publish_card_image(local_path):
+    """카드 이미지를 저장소에 즉시 커밋·푸시해 raw.githubusercontent.com으로 공개한다.
+
+    Threads가 image_url을 가져오는 시점(컨테이너 생성)보다 먼저 GitHub에 반영되어
+    있어야 하므로, Threads 발행 API를 부르기 전에 이 함수로 push까지 끝낸다.
+    """
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    rel_path = os.path.relpath(local_path, repo_dir).replace(os.sep, "/")
+    branch = os.environ.get("GITHUB_REF_NAME", "main")
+
+    def run(*args, check=True):
+        return subprocess.run(args, cwd=repo_dir, check=check,
+                               capture_output=True, text=True)
+
+    run("git", "config", "user.name", "auto-post-bot")
+    run("git", "config", "user.email", "bot@users.noreply.github.com")
+    run("git", "add", rel_path)
+    staged = run("git", "diff", "--cached", "--quiet", check=False)
+    if staged.returncode == 0:
+        raise RuntimeError(f"카드 이미지({rel_path})에 커밋할 변경 사항이 없습니다")
+    run("git", "commit", "-m", "봇: 카드뉴스 이미지 추가")
+    run("git", "pull", "--rebase", "origin", branch, check=False)
+    run("git", "push", "origin", branch)
+
+    owner_repo = os.environ.get("GITHUB_REPOSITORY", "sodamsam/sodam-bot")
+    url = f"https://raw.githubusercontent.com/{owner_repo}/{branch}/{rel_path}"
+    print(f"[브리핑] 카드 이미지 공개 완료 → {url}")
+    time.sleep(8)  # raw.githubusercontent.com CDN 반영 대기
+    return url
 
 
 # ── 프롬프트 나눔 ('prompt') — 봇의 주력 ─────────────────────
@@ -1028,6 +1185,8 @@ def main():
 
     content_type = None
     text = None
+    image_url = None  # briefing일 때만 채워짐 (카드뉴스 이미지 공개 URL)
+    briefing_topic = None  # briefing일 때만 채워짐 (발행 기록용)
     extra_comments = []
     queue_result = None  # open/lead일 때만 채워짐 (발행 기록용 topic/keyword/cta_idx/queue_left)
     howto_keyword = None  # howto일 때만 채워짐 (발행 성공 시 howto_used에 기록)
@@ -1054,6 +1213,24 @@ def main():
                 queue_result = write_queued_prompt_post(state, now_kst)
                 text = queue_result["text"]
                 content_type = queue_result["post_type"]
+            elif kind == "briefing":
+                briefing_item = pick_briefing_item(date_str)
+                briefing_draft = write_briefing_post(briefing_item, now_kst) if briefing_item else None
+                if briefing_draft:
+                    headline, briefing_text = briefing_draft
+                    local_path = os.path.join(
+                        os.path.dirname(__file__), "cards", f"briefing_{date_str}.png")
+                    card_news.generate_card(headline, "AI 정책 브리핑", local_path)
+                    image_url = _publish_card_image(local_path)
+                    text = briefing_text
+                    briefing_topic = briefing_item["title"]
+                    content_type = "briefing"
+                else:
+                    print("[브리핑] 이번 주는 건너뛰고 howto로 대체 발행합니다")
+                    howto_result = write_howto_post(state, now_kst)
+                    text = howto_result["text"]
+                    howto_keyword = howto_result["keyword"]
+                    content_type = "howto"
             else:
                 howto_result = write_howto_post(state, now_kst)
                 text = howto_result["text"]
@@ -1063,13 +1240,16 @@ def main():
     print(f"[유형] {content_type}")
     print(f"[초안] {text[:80]}...")
 
-    post_id = threads_api.publish_text(text)
+    if content_type == "briefing":
+        post_id = threads_api.publish_image(image_url, text)
+    else:
+        post_id = threads_api.publish_text(text)
     print(f"[발행 완료] post id: {post_id}")
 
     append_posted_log({
         "date_kst": now_kst.isoformat(),
         "post_type": content_type,
-        "topic": (queue_result or {}).get("topic", ""),
+        "topic": (queue_result or {}).get("topic", "") or briefing_topic or "",
         "keyword": (queue_result or {}).get("keyword", ""),
         "cta_id": (queue_result or {}).get("cta_idx", ""),
         "queue_left": (queue_result or {}).get("queue_left", ""),
