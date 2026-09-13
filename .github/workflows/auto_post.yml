@@ -17,13 +17,14 @@ on:
           - ""
           - force
       post_type:
-        description: "비워두면 평소처럼 혜택/요일 자동 판단, open 또는 lead를 넣으면 그 타입으로 강제 발행(테스트용)"
+        description: "비워두면 평소처럼 혜택/요일 자동 판단, open/lead/briefing을 넣으면 그 타입으로 강제 발행(테스트용)"
         required: false
         type: choice
         options:
           - ""
           - open
           - lead
+          - briefing
 
 permissions:
   contents: write

@@ -666,6 +666,26 @@ def _gen_briefing_draft(item, extra_prompt=""):
     return headline, _finalize(body, max_blocks=6)
 
 
+def run_briefing(date_str, now_kst):
+    """브리핑 소재 선정 → 카드 이미지 생성·공개 → 발행용 데이터 구성까지 한 번에 처리한다.
+
+    성공하면 {"text", "image_url", "topic"} 딕셔너리, 이번 주 소재가 없으면 None.
+    (호출부에서 None이면 howto로 대체한다.)
+    """
+    briefing_item = pick_briefing_item(date_str)
+    if not briefing_item:
+        return None
+    briefing_draft = write_briefing_post(briefing_item, now_kst)
+    if not briefing_draft:
+        return None
+
+    headline, briefing_text = briefing_draft
+    local_path = os.path.join(os.path.dirname(__file__), "cards", f"briefing_{date_str}.png")
+    card_news.generate_card(headline, "AI 정책 브리핑", local_path)
+    image_url = _publish_card_image(local_path)
+    return {"text": briefing_text, "image_url": image_url, "topic": briefing_item["title"]}
+
+
 def write_briefing_post(item, now_kst):
     """브리핑 카드뉴스 초안(카드 제목 + 본문)을 만들고 환각 검증을 2단으로 통과시킨다.
 
@@ -1198,6 +1218,16 @@ def main():
         queue_result = write_queued_prompt_post(state, now_kst, forced_type=forced_prompt_type)
         text = queue_result["text"]
         content_type = queue_result["post_type"]
+    elif forced_prompt_type == "briefing":
+        # 테스트/수동 지정 목적: 순환 큐를 기다리지 않고 곧장 브리핑 카드뉴스로 발행
+        print("[강제 지정] POST_TYPE=briefing — 혜택/순환 큐 판단 없이 곧장 진행")
+        briefing_result = run_briefing(date_str, now_kst)
+        if not briefing_result:
+            raise SystemExit("[브리핑 테스트 실패] 이번 주 조건에 맞는 AI 정책·브리핑 소재를 찾지 못했습니다")
+        text = briefing_result["text"]
+        image_url = briefing_result["image_url"]
+        briefing_topic = briefing_result["topic"]
+        content_type = "briefing"
     else:
         benefit_item = pick_benefit_item(date_str)
         if benefit_item:
@@ -1214,16 +1244,11 @@ def main():
                 text = queue_result["text"]
                 content_type = queue_result["post_type"]
             elif kind == "briefing":
-                briefing_item = pick_briefing_item(date_str)
-                briefing_draft = write_briefing_post(briefing_item, now_kst) if briefing_item else None
-                if briefing_draft:
-                    headline, briefing_text = briefing_draft
-                    local_path = os.path.join(
-                        os.path.dirname(__file__), "cards", f"briefing_{date_str}.png")
-                    card_news.generate_card(headline, "AI 정책 브리핑", local_path)
-                    image_url = _publish_card_image(local_path)
-                    text = briefing_text
-                    briefing_topic = briefing_item["title"]
+                briefing_result = run_briefing(date_str, now_kst)
+                if briefing_result:
+                    text = briefing_result["text"]
+                    image_url = briefing_result["image_url"]
+                    briefing_topic = briefing_result["topic"]
                     content_type = "briefing"
                 else:
                     print("[브리핑] 이번 주는 건너뛰고 howto로 대체 발행합니다")
