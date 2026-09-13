@@ -256,8 +256,13 @@ def _strip_html(text):
     return re.sub(r"<[^>]+>", " ", text or "").strip()
 
 
-def fetch_news(query, limit=6):
-    """구글 뉴스 RSS에서 (제목 + 기사 요약) 목록을 가져온다. 30시간 이내 기사만."""
+def fetch_news(query, limit=6, max_age_hours=30):
+    """구글 뉴스 RSS에서 (제목 + 기사 요약) 목록을 가져온다.
+
+    max_age_hours 이내 기사만 채택한다. 발행 시각을 알 수 없는 기사(피드에
+    published_parsed가 없는 경우)는 최신성을 확인할 방법이 없으므로 제외한다
+    — "최신 정보만 사용한다"는 원칙을 여기서부터 지킨다.
+    """
     url = (
         "https://news.google.com/rss/search?q="
         + requests.utils.quote(query)
@@ -269,12 +274,12 @@ def fetch_news(query, limit=6):
     for e in feed.entries[: limit * 3]:
         title = re.sub(r"\s*-\s*[^-]+$", "", e.get("title", "")).strip()  # 끝의 언론사명 제거
         published = e.get("published_parsed")
-        pub_ts = None
-        if published:
-            pub_dt = datetime.datetime(*published[:6], tzinfo=datetime.timezone.utc)
-            pub_ts = pub_dt.timestamp()
-            if (now - pub_dt).total_seconds() > 60 * 60 * 30:  # 30시간 이내만
-                continue
+        if not published:
+            continue  # 발행 시각 불명 — 최신성을 검증할 수 없어 제외
+        pub_dt = datetime.datetime(*published[:6], tzinfo=datetime.timezone.utc)
+        pub_ts = pub_dt.timestamp()
+        if (now - pub_dt).total_seconds() > 60 * 60 * max_age_hours:
+            continue
         if title:
             summary = _strip_html(e.get("summary", ""))[:200]
             items.append({"title": title, "summary": summary, "published_ts": pub_ts})
@@ -581,23 +586,49 @@ def find_fabrications(text, source_text):
 # ── AI 브리핑·정책 카드뉴스 ('briefing') — 주 1회 ─────────────
 
 BRIEFING_QUERIES = [
-    "정부 AI 정책 발표 when:6d",
-    "AI 규제 국회 when:6d",
-    "과기정통부 AI 정책 when:6d",
-    "개인정보보호위원회 AI when:7d",
-    "챗GPT 정책 변경 when:6d",
-    "AI 서비스 요금 변경 when:6d",
-    "생성형 AI 저작권 when:7d",
-    "AI 안전 기준 발표 when:7d",
+    "정부 AI 정책 발표 when:4d",
+    "AI 규제 국회 when:4d",
+    "과기정통부 AI 정책 when:4d",
+    "개인정보보호위원회 AI when:4d",
+    "챗GPT 정책 변경 when:4d",
+    "AI 서비스 요금 변경 when:4d",
+    "생성형 AI 저작권 when:4d",
+    "AI 안전 기준 발표 when:4d",
 ]
 
 
+# 브리핑 소재 검증 기준(#1) — "실제 정책·서비스 변화를 다룬 기사"인지 판별하는 신호어.
+# 일반 AI 관련 기사(제품 소개, 인터뷰 등)는 이 단어가 없으면 브리핑 소재로 채택하지 않는다.
+_BRIEFING_ACTION_WORDS = (
+    "발표", "시행", "도입", "개정", "마련", "지침", "가이드라인", "규제", "규정",
+    "의결", "통과", "입법", "제정", "개편", "변경", "확대", "신설", "발의", "고시",
+)
+
+# 브리핑 소재는 주 1회 발행이라 24~30시간짜리 초단기 뉴스만 보면 소재가 거의 안 잡힌다.
+# 대신 정확한 날짜(published_ts)가 있는 기사로만 한정해 "최신 정보"를 최대한 넓게, 그러나
+# 검증 가능한 범위 안에서만 확보한다. (benefit 코너는 당일 혜택이라 30시간을 그대로 쓴다)
+BRIEFING_MAX_AGE_HOURS = 96
+
+
+def _briefing_relevance_score(item):
+    text = f"{item.get('title', '')} {item.get('summary', '')}"
+    return sum(1 for w in _BRIEFING_ACTION_WORDS if w in text)
+
+
 def pick_briefing_item(date_str):
-    """이번 주 카드뉴스로 쓸 AI 정책·브리핑 소재 1건을 고른다. 마땅한 게 없으면 None."""
+    """이번 주 카드뉴스로 쓸 AI 정책·브리핑 소재 1건을 고른다. 마땅한 게 없으면 None.
+
+    검증 절차:
+      1) published_ts(정확한 발행 시각)가 확인된 기사만 후보로 삼는다 (fetch_news에서 처리)
+      2) 서로 다른 기사가 최소 2건 이상 모여야 한다 — 단독 매체 기사 1건만으로는
+         "이번 주 소식"으로 확정하지 않는다 (최소한의 교차 확인)
+      3) 실제 정책·서비스 변화를 다룬 기사인지 신호어로 걸러낸다(관련도 0점은 제외)
+      4) 관련도 점수 → 최신순으로 정렬해 1건을 고른다
+    """
     queries = _pick_queries(date_str, "briefing", BRIEFING_QUERIES, 4)
     items = []
     for q in queries:
-        items += fetch_news(q, 4)
+        items += fetch_news(q, 4, max_age_hours=BRIEFING_MAX_AGE_HOURS)
 
     seen = set()
     dedup = []
@@ -607,13 +638,19 @@ def pick_briefing_item(date_str):
         seen.add(it["title"])
         dedup.append(it)
 
-    if not dedup:
-        print("[브리핑] 이번 주 소재 없음 → howto로 대체")
+    if len(dedup) < 2:
+        print(f"[브리핑] 교차 확인 가능한 소재 부족(검토 {len(dedup)}건) → howto로 대체")
         return None
 
-    dedup.sort(key=lambda it: -(it.get("published_ts") or 0))
-    best = dedup[0]
-    print(f"[브리핑] 소재 선정: 「{best['title']}」")
+    scored = [(_briefing_relevance_score(it), it) for it in dedup]
+    scored = [(s, it) for s, it in scored if s >= 1]
+    if not scored:
+        print("[브리핑] 정책·서비스 변화 신호어가 있는 소재 없음 → howto로 대체")
+        return None
+
+    scored.sort(key=lambda pair: (-pair[0], -(pair[1].get("published_ts") or 0)))
+    best_score, best = scored[0]
+    print(f"[브리핑] 소재 선정: 「{best['title']}」 (관련도 {best_score}점, 교차확인 {len(dedup)}건)")
     return best
 
 
@@ -648,6 +685,9 @@ def _gen_briefing_draft(item, extra_prompt=""):
 [사실성 규칙 — 가장 중요, 절대 위반 금지]
 - 기사 제목과 요약에 실제로 적힌 숫자, 기관명, 날짜만 옮겨 적습니다
 - 기사에 없는 수치나 기관명, 시행일을 추측하거나 지어내지 않습니다
+- 기사가 "~할 예정", "~검토 중", "~로 알려졌다"처럼 확정되지 않은 톤이면, 게시글도
+  그 불확실성을 그대로 살려서 씁니다("확정됐어요"처럼 단정하지 않기)
+- 시행일·발효일은 기사에 명시된 경우에만 언급하고, 없으면 "언제부터"는 아예 쓰지 않습니다
 
 [어조 규칙]
 - 부드럽고 친근한 존댓말, 명령·경고·과장·어그로 금지
@@ -680,6 +720,15 @@ def run_briefing(date_str, now_kst):
         return None
 
     headline, briefing_text = briefing_draft
+
+    # 기사 발행일을 코드에서 직접 계산해 붙인다(Gemini가 날짜를 잘못 말할 위험 원천 차단).
+    # 읽는 분이 "이 정보가 언제 기준인지" 바로 알 수 있게 해 최신성을 스스로 검증할 수 있게 한다.
+    pub_ts = briefing_item.get("published_ts")
+    if pub_ts:
+        pub_dt_kst = datetime.datetime.fromtimestamp(pub_ts, tz=KST)
+        pub_date = f"{pub_dt_kst.month}월 {pub_dt_kst.day}일"
+        briefing_text = _finalize(f"{briefing_text}\n\n※ {pub_date} 기사 기준 소식이에요", max_blocks=7)
+
     local_path = os.path.join(os.path.dirname(__file__), "cards", f"briefing_{date_str}.png")
     card_news.generate_card(headline, "AI 정책 브리핑", local_path)
     image_url = _publish_card_image(local_path)
