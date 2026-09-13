@@ -862,12 +862,27 @@ WEEKDAY_TYPE_MAP = {
 }
 _WEEKDAY_NAMES_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
+# LEAD(맛보기+신청 유도)는 "댓글에 키워드 남기면 노션 자료 보내드려요"를 실제로 지킬 수
+# 있어야 성립한다. 지금은 노션에 새 소재를 채울 여력이 없는 상태라 꺼둔다 — 이 값만
+# True로 되돌리면 WEEKDAY_TYPE_MAP 배분이 그대로 다시 살아난다. 꺼져 있는 동안은
+# LEAD로 분류돼 있던 글감도 전부 OPEN(프롬프트 전문 공개)으로 나간다.
+LEAD_ENABLED = False
+
+
+def _active_lead_keywords():
+    """LEAD_ENABLED가 꺼져 있으면 빈 집합을 돌려줘 모든 글감이 OPEN 큐로 합쳐지게 한다."""
+    if not LEAD_ENABLED:
+        return set()
+    return notion_api.get_lead_ready_keywords()
+
 
 def determine_prompt_type(now_kst):
     """오늘 아침 발행이 OPEN인지 LEAD인지 정한다.
 
     POST_TYPE 환경변수가 open/lead로 지정돼 있으면 요일과 무관하게 그 값을 강제로 쓴다
     (테스트용). 지정이 없으면 KST 기준 오늘 요일로 WEEKDAY_TYPE_MAP을 따른다.
+    LEAD_ENABLED가 꺼져 있으면 LEAD로 나온 요일도 write_queued_prompt_post()의
+    "LEAD 큐 비어있음 → OPEN 대체" 로직에 의해 자동으로 OPEN이 된다.
     """
     forced = os.environ.get("POST_TYPE", "").strip().lower()
     if forced in ("open", "lead"):
@@ -1065,7 +1080,7 @@ def write_queued_prompt_post(state, now_kst, forced_type=None):
 
     post_type = forced_type or determine_prompt_type(now_kst)
 
-    lead_keywords = notion_api.get_lead_ready_keywords()
+    lead_keywords = _active_lead_keywords()
     published = set(state.get("published_keywords", []))
     queues = prompt_queue.build_queues(PROMPT_BANK, AREAS, lead_keywords, published)
 
@@ -1140,7 +1155,7 @@ def _pick_howto_candidate(state, now_kst, all_topics):
     """
     published = set(state.get("published_keywords", []))
 
-    lead_keywords = notion_api.get_lead_ready_keywords()
+    lead_keywords = _active_lead_keywords()
     queues = prompt_queue.build_queues(PROMPT_BANK, AREAS, lead_keywords, published)
 
     counts = _upcoming_open_lead_counts(now_kst)
