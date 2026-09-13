@@ -63,6 +63,7 @@ def test_weekday_map_used_when_no_override(monkeypatch):
 # ── write_queued_prompt_post ─────────────────────────────────────
 
 def test_lead_type_picks_from_registered_keyword(monkeypatch):
+    monkeypatch.setattr(auto_post, "LEAD_ENABLED", True)  # 지금은 기본 꺼짐 — LEAD 로직 자체는 여전히 테스트
     monkeypatch.setattr(notion_api, "get_lead_ready_keywords", lambda: {"회의", "상세", "식단"})
     monkeypatch.setattr(auto_post.requests, "post", _mock_gemini_post)
 
@@ -74,6 +75,19 @@ def test_lead_type_picks_from_registered_keyword(monkeypatch):
     assert result["keyword"] in result["text"]  # LEAD CTA에 {keyword}가 치환되어 본문에 들어감
     assert state["published_keywords"] == [result["keyword"]]
     assert state["lead_seq"] == 1
+
+
+def test_lead_disabled_by_default_ignores_registered_keywords(monkeypatch):
+    """LEAD_ENABLED=False가 기본값 — 노션에 자료가 있어도 LEAD를 아예 쓰지 않는다."""
+    assert auto_post.LEAD_ENABLED is False
+    monkeypatch.setattr(notion_api, "get_lead_ready_keywords", lambda: {"회의", "상세", "식단"})
+    monkeypatch.setattr(auto_post.requests, "post", _mock_gemini_post)
+
+    state = {}
+    result = auto_post.write_queued_prompt_post(
+        state, auto_post.datetime.datetime.now(auto_post.KST), forced_type="lead")
+
+    assert result["post_type"] == "open"
 
 
 def test_lead_falls_back_to_open_when_lead_queue_empty(monkeypatch, capsys):
@@ -89,6 +103,7 @@ def test_lead_falls_back_to_open_when_lead_queue_empty(monkeypatch, capsys):
 
 
 def test_open_type_excludes_lead_keywords(monkeypatch):
+    monkeypatch.setattr(auto_post, "LEAD_ENABLED", True)  # 지금은 기본 꺼짐 — LEAD 로직 자체는 여전히 테스트
     monkeypatch.setattr(notion_api, "get_lead_ready_keywords", lambda: {"회의"})
     monkeypatch.setattr(auto_post.requests, "post", _mock_gemini_post)
 
