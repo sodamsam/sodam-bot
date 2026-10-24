@@ -66,6 +66,26 @@ def load_post_keywords():
     return mapping
 
 
+# 정보성 글(브리핑·정부지원 혜택)에는 노션 자료 자동답변을 달지 않는다.
+# 이 글들에서 독자가 남기는 "신청"은 '지원사업 신청'이라는 뜻인데, 그대로 두면 허브(프롬프트 모음)가 엉뚱하게 답장된다.
+NO_NOTION_REPLY_POST_TYPES = ("briefing", "benefit")
+
+
+def load_post_types():
+    """발행 기록(data/posted_log.csv)에서 {게시물 ID: 글 종류(open/howto/briefing/benefit …)}를 읽는다."""
+    path = os.path.join(os.path.dirname(os.path.abspath(config.STATE_FILE)), "..", "data", "posted_log.csv")
+    mapping = {}
+    try:
+        with open(os.path.normpath(path), "r", encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                tid, kind = (row.get("thread_id") or "").strip(), (row.get("post_type") or "").strip()
+                if tid and kind:
+                    mapping[tid] = kind
+    except (FileNotFoundError, OSError, csv.Error):
+        pass
+    return mapping
+
+
 def build_reply_text(page, is_first_time):
     """자료 안내 대댓글 문구를 만든다. 처음 요청한 사람에게만 안내 한 줄을 더 붙인다."""
     text = config.REPLY_TEMPLATE.format(title=page["title"], link=page["public_url"])
@@ -99,6 +119,7 @@ def main():
         print(f"::warning::허브 페이지 '{hub['title']}'가 웹에 게시되어 있지 않습니다. 노션에서 공유 > 게시를 켜주세요")
 
     post_keywords = load_post_keywords()
+    post_types = load_post_types()
     posts = threads_api.get_recent_posts(limit=config.POSTS_TO_CHECK)
     print(f"[스레드] 최근 게시물 {len(posts)}개 확인")
 
@@ -106,6 +127,8 @@ def main():
     new_reply_count = 0
     reply_budget = config.MAX_REPLIES_PER_RUN  # 회차당 답장 상한 (스팸 패턴 회피)
     for post in posts:
+        if post_types.get(str(post["id"])) in NO_NOTION_REPLY_POST_TYPES:
+            continue  # 브리핑·혜택 글은 노션 자동답변 대상이 아님
         try:
             comments = threads_api.get_replies(post["id"])
         except Exception as e:

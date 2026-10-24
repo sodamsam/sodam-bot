@@ -83,3 +83,31 @@ def test_main_uses_post_keyword_from_log(tmp_path, monkeypatch):
     comment_bot.main()
     assert "x.notion.site/g" in sent["c-post-grant"]    # 신청서 글에 남긴 '신청' → 신청서 자료
     assert "x.notion.site/hub" in sent["c-post-other"]  # 다른 글에 남긴 '신청' → 허브
+
+
+def test_info_posts_get_no_notion_auto_reply(tmp_path, monkeypatch):
+    """브리핑·혜택 글에 달린 '신청' 댓글에는 노션 허브를 답장하지 않는다."""
+    monkeypatch.setattr(config, "STATE_FILE", str(tmp_path / "state" / "replied.json"))
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "posted_log.csv").write_text(
+        "date_kst,post_type,topic,keyword,cta_id,queue_left,thread_id,is_draft\n"
+        "2026-10-21T07:00:00+09:00,briefing,AI 지원사업 접수,,,,post-brief,False\n"
+        "2026-10-22T07:00:00+09:00,benefit,,,,,post-benefit,False\n"
+        "2026-10-23T07:00:00+09:00,howto,,,,,post-howto,False\n",
+        encoding="utf-8")
+    monkeypatch.setattr(threads_api, "get_me", lambda: {"id": "1", "username": "sodam_ai_lab"})
+    monkeypatch.setattr(notion_api, "get_pages", lambda: PAGES)
+    monkeypatch.setattr(threads_api, "get_recent_posts",
+                        lambda limit=5: [{"id": "post-brief"}, {"id": "post-benefit"}, {"id": "post-howto"}])
+    monkeypatch.setattr(threads_api, "get_replies",
+                        lambda pid: [{"id": "c-" + pid, "username": "u-" + pid, "text": "신청"}])
+    for name in ("THREADS_ACCESS_TOKEN", "NOTION_TOKEN", "NOTION_DATABASE_ID"):
+        monkeypatch.setattr(config, name, "x")
+    monkeypatch.setattr(comment_bot.time, "sleep", lambda *a, **k: None)
+    sent = {}
+    monkeypatch.setattr(threads_api, "publish_text",
+                        lambda text, reply_to_id=None, wait_seconds=None: sent.setdefault(reply_to_id, text))
+    comment_bot.main()
+    assert "c-post-brief" not in sent
+    assert "c-post-benefit" not in sent
+    assert "x.notion.site/hub" in sent["c-post-howto"]  # 일반 글(활용법)은 그대로 허브 답장
