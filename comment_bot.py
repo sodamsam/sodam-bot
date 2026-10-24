@@ -7,6 +7,7 @@
   3. 노션 DB에서 맞는 페이지를 찾아 대댓글로 링크 전송
   4. 답장한 댓글 ID를 state/replied.json에 기록 (중복 방지)
 """
+import csv
 import json
 import os
 import random
@@ -46,6 +47,25 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
+def load_post_keywords():
+    """발행 기록(data/posted_log.csv)에서 {게시물 ID: 그 글의 키워드}를 읽는다.
+
+    "신청"처럼 여러 자료가 같이 쓰는 단어를 댓글로 남겼을 때, 어느 글에 남긴 것인지에 따라
+    올바른 자료를 고르기 위한 단서다. 파일이 없거나 깨져 있으면 빈 딕셔너리(=예전 동작).
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(config.STATE_FILE)), "..", "data", "posted_log.csv")
+    mapping = {}
+    try:
+        with open(os.path.normpath(path), "r", encoding="utf-8", newline="") as f:
+            for row in csv.DictReader(f):
+                tid, kw = (row.get("thread_id") or "").strip(), (row.get("keyword") or "").strip()
+                if tid and kw:
+                    mapping[tid] = kw
+    except (FileNotFoundError, OSError, csv.Error):
+        pass
+    return mapping
+
+
 def build_reply_text(page, is_first_time):
     """자료 안내 대댓글 문구를 만든다. 처음 요청한 사람에게만 안내 한 줄을 더 붙인다."""
     text = config.REPLY_TEMPLATE.format(title=page["title"], link=page["public_url"])
@@ -57,7 +77,8 @@ def build_reply_text(page, is_first_time):
 def main():
     config.validate()
     state = load_state()
-    replied = set(state["replied_ids"])
+    replied_list = list(state["replied_ids"])     # 순서를 유지해야 save_state의 "최근 2000개" 자르기가 맞다
+    replied = set(replied_list)
     replied_usernames = list(state["replied_usernames"])
     replied_usernames_set = set(replied_usernames)
 
@@ -68,12 +89,20 @@ def main():
     pages = notion_api.get_pages()
     print(f"[노션] 자료 {len(pages)}개 로드")
     if not pages:
-        print("[안내] 노션 DB에 페이지가 없어 이번 회차는 종료합니다.")
+        print("::warning::노션 DB에 페이지가 없어 이번 회차는 종료합니다.")
         return
+    hub = notion_api.find_hub(pages)
+    if not hub:
+        print(f"::warning::허브 페이지 '{config.NOTION_HUB_TITLE}'를 노션 DB에서 찾지 못했습니다. "
+              f"'{config.DEFAULT_KEYWORD}' 댓글에 자료를 보낼 수 없어요 (제목이 정확히 같은지 확인)")
+    elif not hub.get("public_url"):
+        print(f"::warning::허브 페이지 '{hub['title']}'가 웹에 게시되어 있지 않습니다. 노션에서 공유 > 게시를 켜주세요")
 
+    post_keywords = load_post_keywords()
     posts = threads_api.get_recent_posts(limit=config.POSTS_TO_CHECK)
     print(f"[스레드] 최근 게시물 {len(posts)}개 확인")
 
+    stats = {"댓글": 0, "이미 처리": 0, "내 댓글": 0, "키워드 없음": 0, "게시 꺼짐": 0, "상한 보류": 0, "발송 실패": 0}
     new_reply_count = 0
     reply_budget = config.MAX_REPLIES_PER_RUN  # 회차당 답장 상한 (스팸 패턴 회피)
     for post in posts:
@@ -83,26 +112,36 @@ def main():
             print(f"[댓글 조회 스킵] 게시물 {post['id']} 조회 실패 → 건너뜀 ({e})")
             continue
 
+        post_keyword = post_keywords.get(str(post["id"]))
         for c in comments:
+            stats["댓글"] += 1
             cid = c.get("id")
             if not cid or cid in replied:
+                stats["이미 처리"] += 1
                 continue
             if c.get("username", "") == my_username:
                 # 내 댓글(안내 대댓글 포함)은 건너뜀
                 replied.add(cid)
+                replied_list.append(cid)
+                stats["내 댓글"] += 1
                 continue
 
-            page = notion_api.match_page(c.get("text", ""), pages)
+            page = notion_api.match_page(c.get("text", ""), pages, post_keyword=post_keyword)
             if not page:
+                stats["키워드 없음"] += 1
+                if config.DEFAULT_KEYWORD and config.DEFAULT_KEYWORD in (c.get("text") or ""):
+                    # 신청 댓글인데 보낼 자료가 없는 경우는 조용히 넘기지 않고 로그에 크게 남긴다
+                    print(f"  [미응답] @{c.get('username', '')}의 '{config.DEFAULT_KEYWORD}' 댓글에 보낼 자료를 찾지 못함 (comment {cid})")
                 continue
 
             if not page.get("public_url"):
-                print(f"  [경고] '{page['title']}' 게시 꺼짐 → 전송 스킵. 노션에서 공유>게시를 켜주세요")
+                stats["게시 꺼짐"] += 1
+                print(f"::warning::'{page['title']}' 게시 꺼짐 → 전송 스킵. 노션에서 공유>게시를 켜주세요 (comment {cid})")
                 continue
 
             if reply_budget <= 0:
-                print("  [상한 도달] 이번 회차 답장 상한에 도달, 나머지는 다음 회차에 처리")
-                break
+                stats["상한 보류"] += 1
+                continue
 
             username = c.get("username", "")
             is_first_time = bool(username) and username not in replied_usernames_set
@@ -110,6 +149,7 @@ def main():
             try:
                 threads_api.publish_text(reply_text, reply_to_id=cid, wait_seconds=8)
                 replied.add(cid)
+                replied_list.append(cid)
                 if username and username not in replied_usernames_set:
                     replied_usernames_set.add(username)
                     replied_usernames.append(username)
@@ -119,11 +159,15 @@ def main():
                 if reply_budget > 0:
                     time.sleep(random.randint(*config.REPLY_GAP_SECONDS))  # 답장 간 간격
             except Exception as e:
-                print(f"  [오류] 답장 실패 (comment {cid}): {e}")
+                stats["발송 실패"] += 1
+                print(f"::error::답장 실패 (comment {cid}): {e}")
 
-    state["replied_ids"] = list(replied)
+    state["replied_ids"] = replied_list
     state["replied_usernames"] = replied_usernames
     save_state(state)
+    if stats["상한 보류"]:
+        print(f"[상한 도달] 이번 회차 답장 상한({config.MAX_REPLIES_PER_RUN}개)에 도달, {stats['상한 보류']}건은 다음 회차에 처리")
+    print("[요약] " + ", ".join(f"{k} {v}" for k, v in stats.items()))
     print(f"[봇 종료] 이번 회차 답장 수: {new_reply_count}")
 
 

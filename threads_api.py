@@ -39,13 +39,33 @@ def get_recent_posts(limit=5):
     return data.get("data", [])
 
 
+def _get_all_pages(path, params, max_pages=5):
+    """paging.cursors.after를 따라가며 여러 페이지를 이어 붙인다."""
+    params = dict(params)
+    items = []
+    for _ in range(max_pages):
+        data = _get(path, params)
+        items += data.get("data", [])
+        after = (data.get("paging") or {}).get("cursors", {}).get("after")
+        if not after or not (data.get("paging") or {}).get("next"):
+            break
+        params["after"] = after
+    return items
+
+
 def get_replies(post_id):
-    """게시물에 달린 최상위 댓글 목록."""
-    data = _get(f"/{post_id}/replies", {
-        "fields": "id,text,username,timestamp",
-        "limit": 50,
-    })
-    return data.get("data", [])
+    """게시물에 달린 모든 댓글(대댓글 포함, 페이지 넘김 포함).
+
+    /conversation은 댓글에 달린 답글까지 한 번에 돌려준다. 예전 /replies는 최상위 댓글만
+    주고 50개에서 끊겨서, 답글 형태로 달린 "신청"이나 많은 댓글 중 뒤쪽 것을 놓쳤다.
+    /conversation이 실패하면(권한 등) 예전 방식으로 되돌아간다.
+    """
+    fields = "id,text,username,timestamp"
+    try:
+        return _get_all_pages(f"/{post_id}/conversation", {"fields": fields, "limit": 50})
+    except Exception as e:
+        print(f"[댓글 조회] /conversation 실패 → /replies로 대체 ({e})")
+        return _get_all_pages(f"/{post_id}/replies", {"fields": fields, "limit": 50})
 
 
 def publish_text(text, reply_to_id=None, wait_seconds=None):

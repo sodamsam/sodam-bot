@@ -272,7 +272,10 @@ def fetch_news(query, limit=6, max_age_hours=30):
     items = []
     now = datetime.datetime.now(datetime.timezone.utc)
     for e in feed.entries[: limit * 3]:
-        title = re.sub(r"\s*-\s*[^-]+$", "", e.get("title", "")).strip()  # 끝의 언론사명 제거
+        raw_title = e.get("title", "")
+        outlet_m = re.search(r"\s-\s([^-]+)$", raw_title)
+        outlet = outlet_m.group(1).strip() if outlet_m else ""
+        title = re.sub(r"\s*-\s*[^-]+$", "", raw_title).strip()  # 끝의 언론사명 제거
         published = e.get("published_parsed")
         if not published:
             continue  # 발행 시각 불명 — 최신성을 검증할 수 없어 제외
@@ -282,7 +285,7 @@ def fetch_news(query, limit=6, max_age_hours=30):
             continue
         if title:
             summary = _strip_html(e.get("summary", ""))[:200]
-            items.append({"title": title, "summary": summary, "published_ts": pub_ts})
+            items.append({"title": title, "summary": summary, "published_ts": pub_ts, "source": outlet})
         if len(items) >= limit:
             break
     return items
@@ -356,11 +359,11 @@ def trim_paragraphs(text, max_blocks=4):
 
 # ── Gemini 호출 (무료 등급) ───────────────────────────────────
 
-def _call_gemini(prompt):
+def _call_gemini(prompt, max_tokens=420):
     url = GEMINI_URL.format(model=config.GEMINI_MODEL, key=config.GEMINI_API_KEY)
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 420},
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": max_tokens},
     }
     r = requests.post(url, json=body, timeout=60)
     if not r.ok:
@@ -586,33 +589,57 @@ def find_fabrications(text, source_text):
 # ── AI 브리핑·정책 카드뉴스 ('briefing') — 주 1회 ─────────────
 
 BRIEFING_QUERIES = [
-    "정부 AI 정책 발표 when:4d",
-    "AI 규제 국회 when:4d",
-    "과기정통부 AI 정책 when:4d",
-    "개인정보보호위원회 AI when:4d",
-    "챗GPT 정책 변경 when:4d",
-    "AI 서비스 요금 변경 when:4d",
-    "생성형 AI 저작권 when:4d",
-    "AI 안전 기준 발표 when:4d",
+    # 실제로 써볼 수 있는 AI 신규 출시·기능 업데이트
+    "클로드 앤트로픽 출시 when:5d",
+    "챗GPT 오픈AI 새 기능 출시 when:5d",
+    "제미나이 구글 AI 새 기능 when:5d",
+    "AI 서비스 무료 제공 시작 when:5d",
+    "AI 요금제 변경 출시 when:5d",
+    # 신청·접수할 수 있는 정책·지원
+    "AI 바우처 신청 접수 when:5d",
+    "AI 교육 무료 수강생 모집 when:5d",
+    "소상공인 AI 지원 신청 when:5d",
+    "AI 지원사업 공고 접수 when:5d",
+    "정부 AI 정책 발표 when:5d",
+    "개인정보보호위원회 AI 가이드라인 when:5d",
 ]
 
 
-# 브리핑 소재 검증 기준(#1) — "실제 정책·서비스 변화를 다룬 기사"인지 판별하는 신호어.
-# 일반 AI 관련 기사(제품 소개, 인터뷰 등)는 이 단어가 없으면 브리핑 소재로 채택하지 않는다.
-_BRIEFING_ACTION_WORDS = (
-    "발표", "시행", "도입", "개정", "마련", "지침", "가이드라인", "규제", "규정",
-    "의결", "통과", "입법", "제정", "개편", "변경", "확대", "신설", "발의", "고시",
+# 브리핑 소재 검증 기준 — "독자가 실제로 써보거나 신청할 수 있는 AI 소식"만 통과시킨다.
+# 1) AI 관련 기사여야 한다(도박·게임 같은 엉뚱한 기사가 '변경'이라는 단어만으로 뽑히던 문제 방지)
+# 2) 출시·공개·신청·접수 같은 '쓸 수 있는/할 수 있는' 신호가 있어야 한다
+_BRIEFING_AI_WORDS = (
+    "AI", "인공지능", "챗GPT", "ChatGPT", "클로드", "Claude", "제미나이", "Gemini",
+    "오픈AI", "OpenAI", "앤트로픽", "Anthropic", "생성형", "코파일럿", "딥시크",
 )
+_BRIEFING_USABLE_WORDS = (
+    "출시", "공개", "도입", "무료", "베타", "업데이트", "새 기능", "신기능", "요금제", "지원",
+    "신청", "접수", "모집", "바우처", "수강", "교육", "시행", "개정", "가이드라인", "발표",
+)
+_BRIEFING_EXCLUDE_WORDS = (
+    "도박", "카지노", "베팅", "토토", "환금성", "주가", "급등", "급락", "목표주가", "증시",
+    "코스피", "코스닥", "상장", "인수합병", "소송", "사망", "사고", "성범죄", "선거",
+    "연예", "결혼", "이혼", "부고", "여행", "맛집", "분양", "부동산",
+)
+# 불확실성이 큰 '검토 중' 기사만 있으면 독자에게 쓸모가 없어 점수를 낮춘다
+_BRIEFING_VAGUE_WORDS = ("검토", "논의", "전망", "예상", "가능성", "추진 예정")
 
 # 브리핑 소재는 주 1회 발행이라 24~30시간짜리 초단기 뉴스만 보면 소재가 거의 안 잡힌다.
 # 대신 정확한 날짜(published_ts)가 있는 기사로만 한정해 "최신 정보"를 최대한 넓게, 그러나
 # 검증 가능한 범위 안에서만 확보한다. (benefit 코너는 당일 혜택이라 30시간을 그대로 쓴다)
-BRIEFING_MAX_AGE_HOURS = 96
+BRIEFING_MAX_AGE_HOURS = 120
 
 
 def _briefing_relevance_score(item):
+    """독자가 써보거나 신청할 수 있는 AI 소식일수록 높은 점수. AI와 무관하거나 제외어가 있으면 0."""
     text = f"{item.get('title', '')} {item.get('summary', '')}"
-    return sum(1 for w in _BRIEFING_ACTION_WORDS if w in text)
+    if any(w in text for w in _BRIEFING_EXCLUDE_WORDS):
+        return 0
+    if not any(w in text for w in _BRIEFING_AI_WORDS):
+        return 0
+    score = sum(1 for w in _BRIEFING_USABLE_WORDS if w in text)
+    score -= sum(1 for w in _BRIEFING_VAGUE_WORDS if w in text)
+    return max(score, 0)
 
 
 def pick_briefing_item(date_str):
@@ -650,60 +677,146 @@ def pick_briefing_item(date_str):
 
     scored.sort(key=lambda pair: (-pair[0], -(pair[1].get("published_ts") or 0)))
     best_score, best = scored[0]
-    print(f"[브리핑] 소재 선정: 「{best['title']}」 (관련도 {best_score}점, 교차확인 {len(dedup)}건)")
+    best = dict(best)
+    best["related"] = _related_items(best, [it for _, it in scored[1:]], limit=2)
+    print(f"[브리핑] 소재 선정: 「{best['title']}」 (관련도 {best_score}점, 교차확인 {len(dedup)}건, 관련기사 {len(best['related'])}건)")
     return best
 
 
+def _title_tokens(text):
+    return {w for w in re.findall(r"[0-9A-Za-z가-힣]{2,}", text) if w not in ("the", "and")}
+
+
+def _related_items(best, others, limit=2):
+    """같은 소식을 다룬 다른 기사(제목 단어가 2개 이상 겹치는 것)를 골라 근거 자료를 넓힌다."""
+    base = _title_tokens(best["title"])
+    scored = []
+    for it in others:
+        overlap = len(base & _title_tokens(it["title"]))
+        if overlap >= 2:
+            scored.append((overlap, it))
+    scored.sort(key=lambda p: -p[0])
+    return [it for _, it in scored[:limit]]
+
+
+BRIEFING_CATEGORIES = ("신규 출시", "신청 가능", "정책 변경", "무료·요금")
+
+
+def _briefing_source_text(item):
+    """사실 검증과 프롬프트에 쓸 근거 자료 전체(대표 기사 + 관련 기사)."""
+    parts = [f"{item['title']} {item.get('summary', '')}"]
+    for r in item.get("related", []):
+        parts.append(f"{r['title']} {r.get('summary', '')}")
+    return " ".join(parts)
+
+
+def _parse_point(raw):
+    """'제목 | 설명' 한 줄을 {"title","desc"}로 바꾼다. 형식이 틀리면 None."""
+    raw = (raw or "").strip().splitlines()[0].strip() if (raw or "").strip() else ""
+    raw = raw.lstrip("-•·0123456789.) ").strip()
+    if "|" not in raw:
+        return None
+    title, desc = [x.strip() for x in raw.split("|", 1)]
+    if not title or not desc:
+        return None
+    return {"title": title[:22], "desc": desc[:34]}
+
+
 def _gen_briefing_draft(item, extra_prompt=""):
+    """브리핑 초안을 만든다. 반환: (card_dict, 본문 텍스트). 형식이 깨지면 (None, None)."""
+    related_lines = "\n".join(
+        f"- {r['title']} {r.get('summary', '')}" for r in item.get("related", [])
+    ) or "(없음)"
     prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
 
 {PERSONA}
 
-아래는 이번 주 나온 AI 정책·브리핑 관련 기사입니다. 기사에 실제로 적힌 내용만 사용해
-카드뉴스 이미지에 들어갈 짧은 제목과, 함께 올릴 스레드 게시글을 한국어로 작성하세요.
-기사에 없는 숫자·기관명·시행일은 절대 지어내지 않습니다.
+아래는 이번 주 나온 AI 소식 기사입니다. 기사에 실제로 적힌 내용만 사용해
+"읽는 순간 뭐가 달라졌고, 내가 뭘 해보면 되는지" 한눈에 보이는 카드뉴스 문구와
+함께 올릴 스레드 게시글을 한국어로 작성하세요.
+기사에 없는 숫자·기관명·시행일·가격은 절대 지어내지 않습니다.
 
-[기사]
+[대표 기사]
 제목: {item['title']}
 요약: {item.get('summary', '')}
 
-[오늘의 코너: AI 브리핑]
-"이번 주 꼭 알아야 할 AI 소식·정책 변화를 쉽게 풀어주는 주간 코너"입니다.
+[같은 소식을 다룬 다른 기사]
+{related_lines}
 
 [출력 형식 — 반드시 아래 마커를 정확히 그대로 사용]
+[분류]
+(다음 중 하나만: {" / ".join(BRIEFING_CATEGORIES)})
 [카드제목]
-(카드뉴스 이미지에 큼직하게 들어갈 한 줄. 18자 이내, 결과·변화를 담백하게 요약)
+(카드 맨 위 큰 글씨. 28자 이내. "무엇이 어떻게 됐다"를 한 문장으로. 예: "구글 문서 안에서 Claude를 바로 쓸 수 있어요")
+[포인트1]
+(핵심 제목 | 쉬운 설명)
+[포인트2]
+(핵심 제목 | 쉬운 설명)
+[포인트3]
+(핵심 제목 | 쉬운 설명)
+[행동라벨]
+(다음 중 하나만: 바로 해보기 / 신청 방법 / 확인할 곳)
+[행동]
+(독자가 오늘 할 수 있는 구체적인 한 가지. 50자 이내)
 [본문]
-(아래 구조의 스레드 게시글 본문)
+(스레드 게시글 본문)
+
+[카드 작성 규칙]
+- 포인트는 세 개, 각각 '핵심 제목 | 쉬운 설명' 형식(세로선 | 한 개). 제목 16자 이내, 설명 26자 이내
+- 포인트 세 개는 서로 다른 내용: ① 무엇이 나왔나/바뀌었나 ② 누가·어디서 쓸 수 있나(대상·요금제·조건) ③ 알아둘 점이나 한계
+- 기사에 해당 정보가 없으면 지어내지 말고 "제공 범위는 계정·국가에 따라 달라요"처럼 일반적인 안내로 쓴다
+- [분류]가 '신청 가능'이면 [행동라벨]은 '신청 방법' 또는 '확인할 곳'. 접수 기간·대상·금액은 기사에 적힌 것만 쓰고,
+  없으면 [행동]에 "공식 공고문에서 접수 기간과 대상을 꼭 확인하세요"라고 쓴다
+- [분류]가 '신규 출시'나 '무료·요금'이면 [행동라벨]은 '바로 해보기'. [행동]은 AI에게 실제로 부탁해볼 문장 예시를 따옴표로 담는다
+- 어려운 영어·전문용어 대신 쉬운 말. 제품명(예: Claude, ChatGPT)은 그대로 둔다
 
 [본문 구조 — 반드시 이 순서로]
-1) 이 소식이 왜 나왔는지 한 줄
-2) 무엇이 달라지는지 — 기사에 있는 사실만
-3) 나(독자)에게 어떤 의미인지 — 실생활 관점에서 담백하게
-4) 마무리 이유 한 줄 — 정확히 이 문장으로: "{BRIEFING_FOLLOW_LINE}"
+1) 가장 중요한 변화 한 줄(첫 줄에서 바로 결과를 말하기)
+2) 무엇이 달라지는지 — 기사에 있는 사실만 두세 줄
+3) 나(독자)에게 어떤 의미인지, 오늘 해볼 한 가지
+4) 마무리 한 줄 — 정확히 이 문장으로: "{BRIEFING_FOLLOW_LINE}"
 
 [사실성 규칙 — 가장 중요, 절대 위반 금지]
-- 기사 제목과 요약에 실제로 적힌 숫자, 기관명, 날짜만 옮겨 적습니다
-- 기사에 없는 수치나 기관명, 시행일을 추측하거나 지어내지 않습니다
-- 기사가 "~할 예정", "~검토 중", "~로 알려졌다"처럼 확정되지 않은 톤이면, 게시글도
-  그 불확실성을 그대로 살려서 씁니다("확정됐어요"처럼 단정하지 않기)
-- 시행일·발효일은 기사에 명시된 경우에만 언급하고, 없으면 "언제부터"는 아예 쓰지 않습니다
+- 기사 제목과 요약에 실제로 적힌 숫자, 기관명, 날짜, 가격만 옮겨 적습니다
+- 기사가 "~할 예정", "~검토 중"처럼 확정되지 않은 톤이면 글도 그 불확실성을 살려 씁니다
+- 시행일·접수기간은 기사에 명시된 경우에만 언급합니다
 
 [어조 규칙]
-- 부드럽고 친근한 존댓말, 명령·경고·과장·어그로 금지
-- 전문용어 금지, 컴퓨터를 잘 모르는 사람도 읽을 수 있는 말로
-- 질문으로 끝내지 않습니다
-
-[분량 규칙]
-- [본문] 전체 220~350자 (공백 포함)
-- 한 줄은 20자 이내로 끊어 씁니다. 단락 사이 빈 줄
-- 이모지는 딱 1개만, 해시태그·링크·인사말 금지
+- 부드럽고 친근한 존댓말, 명령·경고·과장·어그로 금지, 질문으로 끝내지 않기
+- [본문]은 250~400자(공백 포함), 한 줄 20자 이내, 단락 사이 빈 줄, 이모지 1개, 해시태그·링크·인사말 금지
 {extra_prompt}"""
-    raw = _call_gemini(prompt)
-    parts = _split_markers(raw, ("카드제목", "본문"))
-    headline = (parts["카드제목"].strip() or item["title"])[:40]
-    body = parts["본문"].strip() or raw
-    return headline, _finalize(body, max_blocks=6)
+    raw = _call_gemini(prompt, max_tokens=1400)
+    parts = _split_markers(raw, ("분류", "카드제목", "포인트1", "포인트2", "포인트3", "행동라벨", "행동", "본문"))
+
+    points = [pt for pt in (_parse_point(parts[k]) for k in ("포인트1", "포인트2", "포인트3")) if pt]
+    body = parts["본문"].strip()
+    headline = parts["카드제목"].strip().splitlines()[0].strip() if parts["카드제목"].strip() else ""
+    if len(points) < 2 or not body or not headline:
+        print(f"[브리핑] 초안 형식 불량(포인트 {len(points)}개, 제목 {'있음' if headline else '없음'}, 본문 {'있음' if body else '없음'})")
+        return None, None
+
+    category = parts["분류"].strip().splitlines()[0].strip() if parts["분류"].strip() else ""
+    if category not in BRIEFING_CATEGORIES:
+        category = "AI 소식"
+    label = parts["행동라벨"].strip().splitlines()[0].strip() if parts["행동라벨"].strip() else ""
+    if label not in ("바로 해보기", "신청 방법", "확인할 곳"):
+        label = "바로 해보기"
+
+    card = {
+        "category": category,
+        "headline": headline[:40],
+        "points": points,
+        "action_label": label,
+        "action": parts["행동"].strip().splitlines()[0].strip()[:70] if parts["행동"].strip() else "",
+    }
+    return card, _finalize(body, max_blocks=6)
+
+
+def _card_text(card):
+    chunks = [card.get("headline", ""), card.get("action", "")]
+    for p in card.get("points", []):
+        chunks += [p.get("title", ""), p.get("desc", "")]
+    return " ".join(chunks)
 
 
 def run_briefing(date_str, now_kst):
@@ -719,48 +832,53 @@ def run_briefing(date_str, now_kst):
     if not briefing_draft:
         return None
 
-    headline, briefing_text = briefing_draft
+    card, briefing_text = briefing_draft
 
-    # 기사 발행일을 코드에서 직접 계산해 붙인다(Gemini가 날짜를 잘못 말할 위험 원천 차단).
-    # 읽는 분이 "이 정보가 언제 기준인지" 바로 알 수 있게 해 최신성을 스스로 검증할 수 있게 한다.
+    # 기사 발행일은 코드에서 직접 계산해 붙인다(Gemini가 날짜를 잘못 말할 위험 원천 차단).
     pub_ts = briefing_item.get("published_ts")
     if pub_ts:
         pub_dt_kst = datetime.datetime.fromtimestamp(pub_ts, tz=KST)
-        pub_date = f"{pub_dt_kst.month}월 {pub_dt_kst.day}일"
+        card["date"] = f"{pub_dt_kst.month}월 {pub_dt_kst.day}일"
+        pub_date = card["date"]
         briefing_text = _finalize(f"{briefing_text}\n\n※ {pub_date} 기사 기준 소식이에요", max_blocks=7)
+    if briefing_item.get("source"):
+        suffix = f" ({pub_dt_kst.month}/{pub_dt_kst.day})" if pub_ts else ""
+        card["source"] = f"{briefing_item['source']}{suffix}"
 
     local_path = os.path.join(os.path.dirname(__file__), "cards", f"briefing_{date_str}.png")
-    card_news.generate_card(headline, "AI 정책 브리핑", local_path)
+    card_news.generate_news_card(card, local_path)
     image_url = _publish_card_image(local_path)
     return {"text": briefing_text, "image_url": image_url, "topic": briefing_item["title"]}
 
 
 def write_briefing_post(item, now_kst):
-    """브리핑 카드뉴스 초안(카드 제목 + 본문)을 만들고 환각 검증을 2단으로 통과시킨다.
+    """브리핑 초안(카드 데이터 + 본문)을 만들고 환각 검증을 2단으로 통과시킨다.
 
+    카드에 들어가는 글자와 본문 모두 근거 자료(대표 기사 + 관련 기사)와 대조한다.
     실패하면 None (호출부에서 howto로 대체).
     """
-    source_text = f"{item['title']} {item.get('summary', '')}"
+    source_text = _briefing_source_text(item)
 
-    headline, text = _gen_briefing_draft(item)
-    problems = find_fabrications(text, source_text)
-    if not problems:
-        print("[브리핑 검증] 1차 통과")
-        return headline, text
-    print(f"[브리핑 검증] 1차 실패 — 문제: {problems}")
-
-    warn = f"""
+    problems = []
+    for attempt in (1, 2):
+        extra = ""
+        if attempt == 2:
+            extra = f"""
 
 [경고 — 직전 시도에서 발견된 문제]
-아래 표현은 기사에 근거가 없습니다. 절대 다시 쓰지 마세요: {problems}
-숫자, 기관명, 날짜는 기사에 글자 그대로 적힌 것만 옮겨 적으세요. 기사에 없으면 언급하지 마세요."""
-    headline2, text2 = _gen_briefing_draft(item, extra_prompt=warn)
-    problems2 = find_fabrications(text2, source_text)
-    if not problems2:
-        print("[브리핑 검증] 2차 통과")
-        return headline2, text2
+아래 표현은 기사에 근거가 없거나 형식이 틀렸습니다. 절대 다시 쓰지 마세요: {problems}
+숫자, 기관명, 날짜, 가격은 기사에 글자 그대로 적힌 것만 옮겨 적으세요. 기사에 없으면 언급하지 마세요."""
+        card, text = _gen_briefing_draft(item, extra_prompt=extra)
+        if not card:
+            problems = ["출력 형식(마커·포인트 '제목 | 설명')을 정확히 지킬 것"]
+            continue
+        problems = find_fabrications(text + " " + _card_text(card), source_text)
+        if not problems:
+            print(f"[브리핑 검증] {attempt}차 통과")
+            return card, text
+        print(f"[브리핑 검증] {attempt}차 실패 — 문제: {problems}")
 
-    print(f"[브리핑 검증] 2차도 실패 — 문제: {problems2} → 브리핑 포기, howto로 대체")
+    print(f"[브리핑 검증] 2차도 실패 — 문제: {problems} → 브리핑 포기, howto로 대체")
     return None
 
 

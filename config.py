@@ -34,8 +34,8 @@ REPLY_TEMPLATE = os.environ.get(
     "{link}",
 )
 
-# 최근 게시물 몇 개까지 댓글을 감시할지
-POSTS_TO_CHECK = int(os.environ.get("POSTS_TO_CHECK", "5"))
+# 최근 게시물 몇 개까지 댓글을 감시할지 (하루 1~2개 발행 + 수동 글 → 15개면 약 일주일 이상 커버)
+POSTS_TO_CHECK = int(os.environ.get("POSTS_TO_CHECK", "15"))
 
 # 노션 DB에서 키워드를 읽을 속성 이름
 NOTION_KEYWORD_PROP = os.environ.get("NOTION_KEYWORD_PROP", "키워드")
