@@ -1,0 +1,31 @@
+name: Threads 토큰 자동 연장
+
+on:
+  schedule:
+    # 매월 UTC 1일·15일 18:00 (= KST 2일·16일 03:00). 60일 토큰을 2주마다 연장해 만료될 일이 없게 한다.
+    - cron: "0 18 1,15 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install requests
+
+      - name: 토큰 연장 + Secret 교체
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          GH_ADMIN_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+        run: python tools/rotate_threads_token.py

@@ -1,0 +1,32 @@
+name: 소담봇 건강검진
+
+on:
+  schedule:
+    # 매일 KST 21:10 (= UTC 12:10) — 저녁 2순위 발행 시간대(18~20시)가 끝난 직후
+    - cron: "10 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install requests
+
+      - name: 건강검진 실행
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/health_check.py

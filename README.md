@@ -98,9 +98,13 @@ LEAD는 "댓글에 키워드 남기면 노션 자료를 보내드려요"를 실�
   - 키워드 없이 "신청"만 있으면 → **가장 최근에 추가한** 노션 페이지 링크 전송
   - 답장 문구를 바꾸고 싶으면 `config.py`의 `REPLY_TEMPLATE` 수정
 
-## 토큰 갱신 (60일마다)
+## 운영 자동화
 
-가장 쉬운 방법: Meta for Developers → 내 앱(sodam-bot) → Threads API [설정] → "사용자 토큰 생성기"에서 **"액세스 토큰 생성하기"** 를 다시 클릭 → 나오는 값을 그대로 GitHub Secrets의 `THREADS_ACCESS_TOKEN`에 교체(이미 장기 토큰이라 별도 교환 불필요). 만료 전이고 기존 토큰이 아직 살아있다면 로컬 PC에서 `python refresh_token.py`를 실행해도 됩니다. 만료되면 봇이 멈추고 Actions 로그에 오류가 표시됩니다.
+발행·댓글응답은 PC와 무관하게 GitHub 서버에서 돌고, 건강검진(매일 밤)과 Threads 토큰 자동 연장(2주마다)이 함께 돌아갑니다. 누가 무엇을 깨우는지, cron-job.org 설정, 토큰 수명은 **`docs/07_운영_자동화.md`** 를 보세요.
+
+## 토큰 갱신 (자동 연장이 안 될 때만)
+
+토큰은 `refresh_token.yml`이 2주마다 자동 연장합니다(`GH_ADMIN_TOKEN` 등록 필요). 자동 연장이 실패했거나 이미 만료됐다면 수동으로: Meta for Developers → 내 앱(sodam-bot) → Threads API [설정] → "사용자 토큰 생성기"에서 **"액세스 토큰 생성하기"** 를 다시 클릭 → 나오는 값을 그대로 GitHub Secrets의 `THREADS_ACCESS_TOKEN`에 교체(이미 장기 토큰이라 별도 교환 불필요). 만료 전이고 기존 토큰이 아직 살아있다면 로컬 PC에서 `python refresh_token.py`를 실행해도 됩니다. 만료되면 봇이 멈추고 Actions 로그에 오류가 표시됩니다.
 
 ## 문제가 생기면
 
