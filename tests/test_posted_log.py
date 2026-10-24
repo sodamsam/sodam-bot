@@ -61,7 +61,7 @@ def test_main_appends_log_row_on_open_publish(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "GEMINI_API_KEY", "fake")
     monkeypatch.setattr(notion_api, "get_lead_ready_keywords", lambda: set())
     monkeypatch.setattr(auto_post.requests, "post", _mock_gemini_post)
-    monkeypatch.setattr(threads_api, "publish_text", lambda text, reply_to_id=None, wait_seconds=None: "fake-post-id")
+    monkeypatch.setattr(threads_api, "publish_text", lambda text, reply_to_id=None, wait_seconds=None, **kw: "fake-post-id")
     monkeypatch.setenv("POST_TYPE", "open")
     monkeypatch.setenv("FORCE_WINDOW", "test")
 

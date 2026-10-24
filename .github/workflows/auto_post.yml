@@ -17,7 +17,7 @@ on:
           - ""
           - force
       post_type:
-        description: "비워두면 평소처럼 혜택/요일 자동 판단, open/lead/briefing을 넣으면 그 타입으로 강제 발행(테스트용)"
+        description: "비워두면 평소처럼 자동 판단. 아침 글(open/lead/briefing) 또는 저녁 코너(card_prompt/term/mistake/tip/engage)를 지정하면 그 글로 강제 발행(테스트용)"
         required: false
         type: choice
         options:
@@ -25,6 +25,18 @@ on:
           - open
           - lead
           - briefing
+          - card_prompt
+          - term
+          - mistake
+          - tip
+          - engage
+      dry_run:
+        description: "yes로 두면 스레드에 올리지 않고 만들어진 글·카드만 previews 폴더에 저장 (결과 미리 확인용)"
+        required: false
+        type: choice
+        options:
+          - ""
+          - "yes"
 
 permissions:
   contents: write
@@ -57,12 +69,24 @@ jobs:
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           FORCE_WINDOW: ${{ inputs.force_window }}
           POST_TYPE: ${{ inputs.post_type }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: python auto_post.py
 
       - name: 발행 기록 저장
         run: |
           git config user.name "auto-post-bot"
           git config user.email "bot@users.noreply.github.com"
+          if [ "${{ inputs.dry_run }}" = "yes" ]; then
+            # 미리보기 실행: 만들어진 글·카드만 남기고 발행 기록은 건드리지 않는다
+            if [ -d previews ]; then git add previews/; fi
+            if ! git diff --cached --quiet; then
+              git commit -m "봇: 미리보기 저장"
+              git checkout -- . || true   # 미리보기 중 바뀐 다른 파일(문구 로테이션 기록 등)은 버린다
+              git pull --rebase origin ${{ github.ref_name }} || true
+              git push
+            fi
+            exit 0
+          fi
           for f in state/posted.json state/last_cta.json data/posted_log.csv docs/글감_발행목록.md; do
             if [ -f "$f" ]; then
               git add "$f"

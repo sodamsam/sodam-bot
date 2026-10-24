@@ -294,7 +294,7 @@ def _patch_common(monkeypatch, tmp_path, posted_data=None):
 
 def test_main_increments_cta_seq_on_successful_publish(tmp_path, monkeypatch):
     _patch_common(monkeypatch, tmp_path)
-    monkeypatch.setattr(threads_api, "publish_text", lambda text, reply_to_id=None, wait_seconds=None: "fake-post-id")
+    monkeypatch.setattr(threads_api, "publish_text", lambda text, reply_to_id=None, wait_seconds=None, **kw: "fake-post-id")
     monkeypatch.setenv("FORCE_WINDOW", "test")
 
     auto_post.main()
@@ -306,7 +306,7 @@ def test_main_increments_cta_seq_on_successful_publish(tmp_path, monkeypatch):
 def test_main_does_not_increment_cta_seq_on_publish_failure(tmp_path, monkeypatch):
     _patch_common(monkeypatch, tmp_path)
 
-    def failing_publish(text, reply_to_id=None, wait_seconds=None):
+    def failing_publish(text, reply_to_id=None, wait_seconds=None, **kw):
         raise RuntimeError("Threads 서버 오류(mock)")
 
     monkeypatch.setattr(threads_api, "publish_text", failing_publish)

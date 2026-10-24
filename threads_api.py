@@ -68,16 +68,35 @@ def get_replies(post_id):
         return _get_all_pages(f"/{post_id}/replies", {"fields": fields, "limit": 50})
 
 
-def publish_text(text, reply_to_id=None, wait_seconds=None):
+def clean_topic_tag(tag):
+    """Threads 주제 태그 규칙(1~50자, 마침표·& 금지)에 맞게 정리한다. 못 쓰면 None."""
+    tag = (tag or "").replace(".", "").replace("&", "").replace("#", "").strip()
+    return tag[:50] or None
+
+
+def _create_container(params, topic_tag=None):
+    """컨테이너를 만든다. 주제 태그가 거절되면 태그만 빼고 한 번 더 시도한다(글 자체는 지키기 위해)."""
+    tag = clean_topic_tag(topic_tag)
+    if tag:
+        try:
+            return _post("/me/threads", dict(params, topic_tag=tag))
+        except RuntimeError as e:
+            print(f"[경고] 주제 태그 '{tag}'가 거절되어 태그 없이 다시 시도합니다: {e}")
+    return _post("/me/threads", params)
+
+
+def publish_text(text, reply_to_id=None, wait_seconds=None, topic_tag=None):
     """텍스트 게시물 발행. reply_to_id를 주면 해당 댓글에 대댓글로 달림.
 
     3단계: (1) 컨테이너 생성 → (2) 서버 처리 대기(공식 권장) → (3) 발행
-    wait_seconds 기본값: 본문 글 30초, 대댓글 8초
+    wait_seconds 기본값: 본문 글 30초, 대댓글 8초. topic_tag는 본문 글에만 붙는다.
     """
     params = {"media_type": "TEXT", "text": text}
     if reply_to_id:
         params["reply_to_id"] = reply_to_id
-    creation = _post("/me/threads", params)
+        creation = _post("/me/threads", params)
+    else:
+        creation = _create_container(params, topic_tag)
     creation_id = creation.get("id")
     if not creation_id:
         raise RuntimeError(f"컨테이너 생성 실패: {creation}")
@@ -93,7 +112,7 @@ def reply_to(post_id, text):
     return publish_text(text, reply_to_id=post_id, wait_seconds=8)
 
 
-def publish_image(image_url, text=None, wait_seconds=30):
+def publish_image(image_url, text=None, wait_seconds=30, topic_tag=None):
     """이미지(카드뉴스) 게시물 발행. image_url은 외부에서 접근 가능한 공개 URL이어야 한다.
 
     3단계: (1) IMAGE 컨테이너 생성 → (2) 서버 처리 대기 → (3) 발행
@@ -101,10 +120,58 @@ def publish_image(image_url, text=None, wait_seconds=30):
     params = {"media_type": "IMAGE", "image_url": image_url}
     if text:
         params["text"] = text
-    creation = _post("/me/threads", params)
+    creation = _create_container(params, topic_tag)
     creation_id = creation.get("id")
     if not creation_id:
         raise RuntimeError(f"이미지 컨테이너 생성 실패: {creation}")
     time.sleep(wait_seconds)
+    result = _post("/me/threads_publish", {"creation_id": creation_id})
+    return result.get("id")
+
+
+def _wait_container_ready(container_id, timeout=90, interval=3):
+    """컨테이너 상태가 FINISHED가 될 때까지 기다린다. 상태 조회가 안 되면 고정 대기로 대신한다."""
+    waited = 0
+    while waited <= timeout:
+        try:
+            info = _get(f"/{container_id}", {"fields": "status,error_message"})
+        except RuntimeError:
+            time.sleep(10)
+            return
+        status = info.get("status")
+        if status in (None, "FINISHED", "PUBLISHED"):
+            return
+        if status in ("ERROR", "EXPIRED"):
+            raise RuntimeError(f"컨테이너 처리 실패({status}): {info.get('error_message', '')}")
+        time.sleep(interval)
+        waited += interval
+    raise RuntimeError("컨테이너 처리가 시간 안에 끝나지 않았습니다")
+
+
+def publish_carousel(image_urls, text=None, topic_tag=None):
+    """이미지 2~20장을 넘겨보는 카드뉴스(캐러셀) 한 게시물로 발행한다.
+
+    (1) 장마다 자식 컨테이너 생성 → (2) 모두 준비될 때까지 대기 → (3) 캐러셀 컨테이너 생성
+    → (4) 준비 대기 → (5) 발행. 어느 단계든 실패하면 예외를 던지고, 발행 전이라 게시물은 생기지 않는다.
+    """
+    if not 2 <= len(image_urls) <= 20:
+        raise ValueError("캐러셀은 이미지 2~20장이 필요합니다")
+    child_ids = []
+    for url in image_urls:
+        child = _post("/me/threads", {"media_type": "IMAGE", "image_url": url, "is_carousel_item": "true"})
+        if not child.get("id"):
+            raise RuntimeError(f"캐러셀 이미지 컨테이너 생성 실패: {child}")
+        child_ids.append(child["id"])
+    for cid in child_ids:
+        _wait_container_ready(cid)
+
+    params = {"media_type": "CAROUSEL", "children": ",".join(child_ids)}
+    if text:
+        params["text"] = text
+    creation = _create_container(params, topic_tag)
+    creation_id = creation.get("id")
+    if not creation_id:
+        raise RuntimeError(f"캐러셀 컨테이너 생성 실패: {creation}")
+    _wait_container_ready(creation_id)
     result = _post("/me/threads_publish", {"creation_id": creation_id})
     return result.get("id")

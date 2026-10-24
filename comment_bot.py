@@ -13,6 +13,7 @@ import os
 import random
 import time
 import config
+import corners
 import threads_api
 import notion_api
 
@@ -68,7 +69,7 @@ def load_post_keywords():
 
 # 정보성 글(브리핑·정부지원 혜택)에는 노션 자료 자동답변을 달지 않는다.
 # 이 글들에서 독자가 남기는 "신청"은 '지원사업 신청'이라는 뜻인데, 그대로 두면 허브(프롬프트 모음)가 엉뚱하게 답장된다.
-NO_NOTION_REPLY_POST_TYPES = ("briefing", "benefit")
+NO_NOTION_REPLY_POST_TYPES = ("briefing", "benefit") + corners.EVENING_KINDS
 
 
 def load_post_types():

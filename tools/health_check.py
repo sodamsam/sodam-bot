@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""소담봇 건강검진 (매일 밤 GitHub Actions에서 실행).
+"""소담봇 상태 확인 (매일 밤 GitHub Actions에서 실행).
 
 "워크플로가 초록 체크인데 실제로는 아무것도 안 올라간" 상황을 잡아내기 위한 점검이다.
 이상이 있으면 종료 코드 1로 끝나 GitHub이 실패 알림 메일을 보낸다.
 
 점검 항목
-  1) 오늘 글이 실제로 발행됐는가 (state/posted.json의 오늘 날짜 키)  → 없으면 실패
+  1) 오늘 아침 글이 실제로 발행됐는가 (state/posted.json의 오늘 날짜 키)  → 없으면 실패
+  1-2) 오늘 저녁 코너 글이 발행됐는가 (날짜-evening 키)               → 없으면 경고만
   2) Threads 토큰이 살아있는가 (GET /me)                            → 안 되면 실패
   3) 댓글봇이 제때 도는가 (마지막 완료 실행이 너무 오래됐는지)       → 경고만
 """
@@ -20,6 +21,8 @@ import requests
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import corners  # noqa: E402
+
 KST = ZoneInfo("Asia/Seoul")
 POSTED_FILE = os.path.join(ROOT, "state", "posted.json")
 COMMENT_BOT_STALE_HOURS = 1.5
@@ -32,6 +35,18 @@ def check_posted_today(state, now_kst):
     if entry:
         return True, f"오늘({today}) 발행 확인: {entry.get('type', '?')} / post_id={entry.get('post_id', '?')}"
     return False, f"오늘({today}) 발행 기록이 없습니다. 발행 시간대(07~09시, 18~20시)가 모두 지났는데 글이 안 올라갔어요"
+
+
+def check_evening_posted(state, now_kst):
+    """오늘 저녁 코너 글이 발행됐는지. 아침 글을 놓쳐 저녁에 대신 발행한 날은 저녁 코너가 쉬는 게 정상이다."""
+    today = now_kst.strftime("%Y-%m-%d")
+    entry = (state.get("posted") or {}).get(f"{today}-evening")
+    if entry and entry.get("type") in corners.EVENING_KINDS:
+        return True, f"오늘({today}) 저녁 코너 발행 확인: {entry['type']}"
+    if entry:
+        return False, (f"오늘({today}) 저녁 코너를 만들지 못해 대체 글({entry.get('type')})이 나갔습니다. "
+                       "반복되면 Actions 로그의 [저녁 코너] 줄을 확인하세요")
+    return False, f"오늘({today}) 저녁 코너 발행 기록이 없습니다 (아침 글을 놓쳐 저녁에 대신 발행한 날이면 정상)"
 
 
 def check_comment_bot_recency(last_run_iso, now_utc, max_hours=COMMENT_BOT_STALE_HOURS):
@@ -81,6 +96,9 @@ def main():
     ok, msg = check_posted_today(state, now_kst)
     (lines if ok else failures).append(msg)
 
+    ok, msg = check_evening_posted(state, now_kst)
+    (lines if ok else warnings).append(msg)
+
     ok, msg = check_threads_token(os.environ.get("THREADS_ACCESS_TOKEN", ""))
     (lines if ok else failures).append(msg)
 
@@ -102,7 +120,7 @@ def main():
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as f:
-            f.write("## 소담봇 건강검진\n")
+            f.write("## 소담봇 상태 확인\n")
             f.writelines(f"- ✅ {m}\n" for m in lines)
             f.writelines(f"- ⚠️ {m}\n" for m in warnings)
             f.writelines(f"- ❌ {m}\n" for m in failures)

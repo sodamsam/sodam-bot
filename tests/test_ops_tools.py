@@ -117,3 +117,16 @@ def test_main_success_masks_and_stores(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "::add-mask::NEW-SECRET" in out
     assert out.count("NEW-SECRET") == 1  # 마스킹 지시줄 외에는 값이 출력되지 않아야 함
+
+
+def test_evening_corner_check_is_a_warning_level_signal():
+    state = {"posted": {"2026-10-26-evening": {"type": "term"}}}
+    assert health_check.check_evening_posted(state, _kst(2026, 10, 26))[0]
+    ok, msg = health_check.check_evening_posted({"posted": {}}, _kst(2026, 10, 26))
+    assert not ok and "저녁 코너" in msg
+
+
+def test_evening_fallback_post_is_reported():
+    state = {"posted": {"2026-10-26-evening": {"type": "open"}}}
+    ok, msg = health_check.check_evening_posted(state, _kst(2026, 10, 26))
+    assert not ok and "대체 글" in msg

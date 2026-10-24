@@ -1,4 +1,4 @@
-name: 소담봇 건강검진
+name: 소담봇 상태 확인 (매일 밤 자동)
 
 on:
   schedule:
@@ -25,7 +25,7 @@ jobs:
       - name: 라이브러리 설치
         run: pip install requests
 
-      - name: 건강검진 실행
+      - name: 상태 확인 실행
         env:
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

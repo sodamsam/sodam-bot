@@ -34,6 +34,7 @@ import feedparser
 
 import card_news
 import config
+import corners
 import cta
 import notion_api
 import prompt_queue
@@ -120,6 +121,7 @@ def load_posted():
     data.setdefault("prompt_seq", 0)
     data.setdefault("cta_seq", 0)
     data.setdefault("material_check", {})
+    data.setdefault("corner_seq", {})
     return data
 
 
@@ -248,6 +250,27 @@ def should_post_now(now_kst, state):
     if date_str in state["posted"]:
         return False, date_str, "오늘 이미 발행함"
     return True, date_str, "발행 시간대 진입 — 즉시 발행"
+
+
+def decide_slot(now_kst, state, window):
+    """지금 어떤 글을 낼지 정한다. 반환: (slot, state 키, 이유) — 낼 글이 없으면 slot=None.
+
+    아침(1순위, 07~09시) : 기존 파이프라인(혜택/프롬프트/활용법/브리핑). 키는 날짜 그대로.
+    저녁(2순위, 18~20시) : 아침 글이 이미 나갔다면 저녁 코너를 낸다. 아침 글을 놓쳤다면
+                          예전처럼 아침 파이프라인으로 대신 발행하고 저녁 코너는 그날 쉰다(연달아 두 개 방지).
+    """
+    date_str = now_kst.strftime("%Y-%m-%d")
+    posted = state["posted"]
+    if window == "primary":
+        if date_str in posted:
+            return None, None, "오늘 아침 글은 이미 발행함"
+        return "morning", date_str, "아침 시간대 진입 — 즉시 발행"
+    if date_str not in posted:
+        return "morning", date_str, "아침 글을 놓쳐 저녁 시간대에 대신 발행"
+    evening_key = f"{date_str}-evening"
+    if evening_key in posted:
+        return None, None, "오늘 저녁 글은 이미 발행함"
+    return "evening", evening_key, "저녁 코너 발행"
 
 
 # ── 뉴스 수집 (구글 뉴스 RSS, 무료·키 불필요) ────────────────
@@ -438,14 +461,17 @@ def has_application_hint(source_text):
     return bool(_APPLICATION_HINT_PATTERN.search(source_text))
 
 
-def pick_benefit_item(date_str):
-    """신선도 3점 이상 + 신청 방법 정보가 있는 혜택 소재 1건을 고른다. 없으면 None."""
+def pick_benefit_item(date_str, used_titles=()):
+    """신선도 3점 이상 + 신청 방법 정보가 있는 혜택 소재 1건을 고른다. 없으면 None.
+
+    used_titles에 있는 기사는 이미 올린 것이라 제외한다(같은 기사가 30시간 안에 다시 잡혀 반복 발행되던 문제 방지).
+    """
     queries = _pick_queries(date_str, "benefit", BENEFIT_QUERIES, 4)
     items = []
     for q in queries:
         items += fetch_news(q, 4)
 
-    seen = set()
+    seen = set(used_titles)
     dedup = []
     for it in items:
         if it["title"] in seen:
@@ -845,7 +871,7 @@ def run_briefing(date_str, now_kst):
         suffix = f" ({pub_dt_kst.month}/{pub_dt_kst.day})" if pub_ts else ""
         card["source"] = f"{briefing_item['source']}{suffix}"
 
-    local_path = os.path.join(os.path.dirname(__file__), "cards", f"briefing_{date_str}.png")
+    local_path = os.path.join(_card_dir(), f"briefing_{date_str}.png")
     card_news.generate_news_card(card, local_path)
     image_url = _publish_card_image(local_path)
     return {"text": briefing_text, "image_url": image_url, "topic": briefing_item["title"]}
@@ -882,14 +908,27 @@ def write_briefing_post(item, now_kst):
     return None
 
 
-def _publish_card_image(local_path):
-    """카드 이미지를 저장소에 즉시 커밋·푸시해 raw.githubusercontent.com으로 공개한다.
+def _dry_run():
+    """DRY_RUN=yes면 글·카드를 만들어 previews/에만 저장하고, 발행·상태 기록은 하지 않는다."""
+    return os.environ.get("DRY_RUN", "").strip().lower() in ("1", "y", "yes", "true")
+
+
+def _card_dir():
+    """카드 이미지 저장 폴더. 미리보기 모드에서는 공개 폴더(cards/)를 건드리지 않는다."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "previews" if _dry_run() else "cards")
+
+
+def _publish_card_files(local_paths):
+    """카드 이미지(여러 장 가능)를 저장소에 한 번에 커밋·푸시해 raw.githubusercontent.com URL 목록으로 공개한다.
 
     Threads가 image_url을 가져오는 시점(컨테이너 생성)보다 먼저 GitHub에 반영되어
     있어야 하므로, Threads 발행 API를 부르기 전에 이 함수로 push까지 끝낸다.
+    미리보기 모드에서는 아무것도 올리지 않고 저장 경로만 돌려준다.
     """
     repo_dir = os.path.dirname(os.path.abspath(__file__))
-    rel_path = os.path.relpath(local_path, repo_dir).replace(os.sep, "/")
+    rel_paths = [os.path.relpath(p, repo_dir).replace(os.sep, "/") for p in local_paths]
+    if _dry_run():
+        return rel_paths
     branch = os.environ.get("GITHUB_REF_NAME", "main")
 
     def run(*args, check=True):
@@ -898,19 +937,24 @@ def _publish_card_image(local_path):
 
     run("git", "config", "user.name", "auto-post-bot")
     run("git", "config", "user.email", "bot@users.noreply.github.com")
-    run("git", "add", rel_path)
+    run("git", "add", *rel_paths)
     staged = run("git", "diff", "--cached", "--quiet", check=False)
     if staged.returncode == 0:
-        raise RuntimeError(f"카드 이미지({rel_path})에 커밋할 변경 사항이 없습니다")
+        raise RuntimeError(f"카드 이미지({rel_paths})에 커밋할 변경 사항이 없습니다")
     run("git", "commit", "-m", "봇: 카드뉴스 이미지 추가")
     run("git", "pull", "--rebase", "origin", branch, check=False)
     run("git", "push", "origin", branch)
 
     owner_repo = os.environ.get("GITHUB_REPOSITORY", "sodamsam/sodam-bot")
-    url = f"https://raw.githubusercontent.com/{owner_repo}/{branch}/{rel_path}"
-    print(f"[브리핑] 카드 이미지 공개 완료 → {url}")
+    urls = [f"https://raw.githubusercontent.com/{owner_repo}/{branch}/{rp}" for rp in rel_paths]
+    print(f"[카드] 이미지 {len(urls)}장 공개 완료 → {urls[0]}")
     time.sleep(8)  # raw.githubusercontent.com CDN 반영 대기
-    return url
+    return urls
+
+
+def _publish_card_image(local_path):
+    """카드 이미지 한 장을 공개하고 URL을 돌려준다."""
+    return _publish_card_files([local_path])[0]
 
 
 # ── 프롬프트 나눔 ('prompt') — 봇의 주력 ─────────────────────
@@ -1359,6 +1403,46 @@ def write_howto_post(state, now_kst):
     return {"text": _finalize(text, max_blocks=4), "keyword": keyword}
 
 
+# ── 저녁 코너 · 발행 · 미리보기 ─────────────────────────────────
+
+def run_evening(state, now_kst, date_str, forced=None):
+    """저녁 코너 글을 만들고(카드면 이미지까지 만들어 공개) 발행용 데이터로 돌려준다. 실패하면 None."""
+    result = corners.write_evening_post(state, now_kst, forced=forced)
+    if not result:
+        return None
+    image_urls = []
+    if result["card"]:
+        out_dir = os.path.join(_card_dir(), f"{result['kind']}_{date_str}")
+        paths = card_news.generate_prompt_slides(result["card"], out_dir, stem=result["kind"])
+        image_urls = _publish_card_files(paths)
+    result["image_urls"] = image_urls
+    return result
+
+
+def publish_post(text, image_urls, topic_tag):
+    """이미지 수에 맞춰 발행한다. 여러 장 카드가 실패하면 글만이라도 올린다(본문에 핵심이 들어 있다)."""
+    if len(image_urls) >= 2:
+        try:
+            return threads_api.publish_carousel(image_urls, text, topic_tag=topic_tag)
+        except Exception as e:
+            print(f"[경고] 여러 장 카드 발행 실패 → 글만 발행합니다: {e}")
+            return threads_api.publish_text(text, topic_tag=topic_tag)
+    if len(image_urls) == 1:
+        return threads_api.publish_image(image_urls[0], text, topic_tag=topic_tag)
+    return threads_api.publish_text(text, topic_tag=topic_tag)
+
+
+def _write_preview(content_type, text, images, tag, now_kst):
+    """미리보기 모드: 발행하지 않고 만들어진 글을 previews/ 폴더에 저장한다."""
+    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "previews")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{now_kst.strftime('%Y%m%d-%H%M%S')}_{content_type}.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"[종류] {content_type}\n[주제 태그] {tag}\n[이미지] {', '.join(images) if images else '없음'}\n"
+                f"[글자수] {len(text)}\n\n{text}\n")
+    print(f"[미리보기] 발행하지 않고 저장했습니다 → {path}")
+
+
 # ── 메인 ─────────────────────────────────────────────────────
 
 def main():
@@ -1369,49 +1453,66 @@ def main():
     now_kst = datetime.datetime.now(KST)
     date_str = now_kst.strftime("%Y-%m-%d")
     force = os.environ.get("FORCE_WINDOW", "").strip()
+    dry = _dry_run()
+    forced_type = os.environ.get("POST_TYPE", "").strip().lower()
 
     state = load_posted()
 
     if force:
-        key = date_str
-        print(f"[강제 실행] 시간 판단 없이 즉시 발행합니다. (FORCE_WINDOW={force})")
+        slot = "evening" if forced_type in corners.EVENING_KINDS else "morning"
+        key = f"{date_str}-evening" if slot == "evening" else date_str
+        print(f"[강제 실행] 시간 판단 없이 즉시 발행합니다. (FORCE_WINDOW={force}, 슬롯={slot})")
     else:
         window = current_window(now_kst)
         if not window:
             print(f"[대기] 지금({now_kst.strftime('%H:%M')} KST)은 발행 시간대가 아닙니다.")
             return
-        ok, key, reason = should_post_now(now_kst, state)
+        slot, key, reason = decide_slot(now_kst, state, window)
         print(f"[판단] ({window}) {reason}")
-        if not ok:
+        if not slot:
             return
+    if dry:
+        print("[미리보기 모드] 글과 카드만 만들어 previews/에 저장하고, 발행·상태 기록은 하지 않습니다.")
 
     content_type = None
     text = None
-    image_url = None  # briefing일 때만 채워짐 (카드뉴스 이미지 공개 URL)
-    briefing_topic = None  # briefing일 때만 채워짐 (발행 기록용)
+    image_urls = []          # 카드뉴스 이미지 공개 URL (브리핑 1장 / 프롬프트 카드 4장)
+    briefing_topic = None    # briefing일 때만 채워짐 (발행 기록용)
+    log_topic = ""           # 저녁 코너 주제 (발행 기록용)
+    evening_kind = None      # 저녁 코너로 발행됐을 때만 채워짐 (연재 번호 증가용)
     extra_comments = []
-    queue_result = None  # open/lead일 때만 채워짐 (발행 기록용 topic/keyword/cta_idx/queue_left)
-    howto_keyword = None  # howto일 때만 채워짐 (발행 성공 시 howto_used에 기록)
+    queue_result = None      # open/lead일 때만 채워짐 (발행 기록용 topic/keyword/cta_idx/queue_left)
+    howto_keyword = None     # howto일 때만 채워짐 (발행 성공 시 howto_used에 기록)
 
-    forced_prompt_type = os.environ.get("POST_TYPE", "").strip().lower()
-    if forced_prompt_type in ("open", "lead"):
+    if slot == "evening":
+        ev = run_evening(state, now_kst, date_str,
+                         forced=forced_type if forced_type in corners.EVENING_KINDS else None)
+        if ev:
+            text, content_type, image_urls = ev["text"], ev["kind"], ev["image_urls"]
+            log_topic, evening_kind = ev["topic"], ev["kind"]
+        else:
+            print("[저녁 코너] 이번엔 만들지 못해 검증된 프롬프트 글로 대체합니다")
+            queue_result = write_queued_prompt_post(state, now_kst, forced_type="open")
+            text = queue_result["text"]
+            content_type = queue_result["post_type"]
+    elif forced_type in ("open", "lead"):
         # 테스트/수동 지정 목적: 혜택·업무활용법 판단을 건너뛰고 곧장 OPEN/LEAD로 발행
-        print(f"[강제 지정] POST_TYPE={forced_prompt_type} — 혜택/활용법 판단 없이 곧장 진행")
-        queue_result = write_queued_prompt_post(state, now_kst, forced_type=forced_prompt_type)
+        print(f"[강제 지정] POST_TYPE={forced_type} — 혜택/활용법 판단 없이 곧장 진행")
+        queue_result = write_queued_prompt_post(state, now_kst, forced_type=forced_type)
         text = queue_result["text"]
         content_type = queue_result["post_type"]
-    elif forced_prompt_type == "briefing":
+    elif forced_type == "briefing":
         # 테스트/수동 지정 목적: 순환 큐를 기다리지 않고 곧장 브리핑 카드뉴스로 발행
         print("[강제 지정] POST_TYPE=briefing — 혜택/순환 큐 판단 없이 곧장 진행")
         briefing_result = run_briefing(date_str, now_kst)
         if not briefing_result:
             raise SystemExit("[브리핑 테스트 실패] 이번 주 조건에 맞는 AI 정책·브리핑 소재를 찾지 못했습니다")
         text = briefing_result["text"]
-        image_url = briefing_result["image_url"]
+        image_urls = [briefing_result["image_url"]]
         briefing_topic = briefing_result["topic"]
         content_type = "briefing"
     else:
-        benefit_item = pick_benefit_item(date_str)
+        benefit_item = pick_benefit_item(date_str, used_titles=state["used_titles"])
         if benefit_item:
             benefit_text = write_benefit_post(benefit_item, now_kst)
             if benefit_text:
@@ -1429,7 +1530,7 @@ def main():
                 briefing_result = run_briefing(date_str, now_kst)
                 if briefing_result:
                     text = briefing_result["text"]
-                    image_url = briefing_result["image_url"]
+                    image_urls = [briefing_result["image_url"]]
                     briefing_topic = briefing_result["topic"]
                     content_type = "briefing"
                 else:
@@ -1444,19 +1545,22 @@ def main():
                 howto_keyword = howto_result["keyword"]
                 content_type = "howto"
 
-    print(f"[유형] {content_type}")
+    topic_tag = (corners.CORNERS[evening_kind]["tag"] if evening_kind
+                 else corners.MORNING_TAGS.get(content_type))
+    print(f"[유형] {content_type} (주제 태그: {topic_tag}, 이미지 {len(image_urls)}장)")
     print(f"[초안] {text[:80]}...")
 
-    if content_type == "briefing":
-        post_id = threads_api.publish_image(image_url, text)
-    else:
-        post_id = threads_api.publish_text(text)
+    if dry:
+        _write_preview(content_type, text, image_urls, topic_tag, now_kst)
+        return
+
+    post_id = publish_post(text, image_urls, topic_tag)
     print(f"[발행 완료] post id: {post_id}")
 
     append_posted_log({
         "date_kst": now_kst.isoformat(),
         "post_type": content_type,
-        "topic": (queue_result or {}).get("topic", "") or briefing_topic or "",
+        "topic": (queue_result or {}).get("topic", "") or briefing_topic or log_topic or "",
         "keyword": (queue_result or {}).get("keyword", ""),
         "cta_id": (queue_result or {}).get("cta_idx", ""),
         "queue_left": (queue_result or {}).get("queue_left", ""),
@@ -1475,12 +1579,16 @@ def main():
                 print(f"[경고] 댓글 {i} 발행 실패 (본문은 정상 발행됨): {e}")
 
     state["posted"][key] = {"time": now_kst.isoformat(), "post_id": post_id, "type": content_type}
-    if content_type != "benefit":
-        state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)
-    if content_type == "prompt":
-        state["prompt_seq"] = state.get("prompt_seq", 0) + 1
-    if content_type == "howto" and howto_keyword:
-        state.setdefault("howto_used", []).append(howto_keyword)
+    if slot == "morning":
+        if content_type != "benefit":
+            state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)
+        if content_type == "prompt":
+            state["prompt_seq"] = state.get("prompt_seq", 0) + 1
+        if content_type == "howto" and howto_keyword:
+            state.setdefault("howto_used", []).append(howto_keyword)
+    elif evening_kind:
+        seqs = state.setdefault("corner_seq", {})
+        seqs[evening_kind] = seqs.get(evening_kind, 0) + 1
     state["cta_seq"] = state.get("cta_seq", 0) + 1
     save_posted(state)
 

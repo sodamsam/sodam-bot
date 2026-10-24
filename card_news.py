@@ -277,3 +277,168 @@ def generate_news_card(data, out_path):
 def generate_card(headline, eyebrow, out_path):
     """예전 호출 방식(제목+라벨) 호환용 — 포인트 없이 헤드라인만 있는 카드를 만든다."""
     return generate_news_card({"category": eyebrow, "headline": headline}, out_path)
+
+
+# ── 여러 장 넘겨보는 '복붙 프롬프트' 카드 ───────────────────────────
+#
+# 저장해두고 꺼내 쓰는 용도라, 한 장에 다 우겨넣지 않고 4장으로 나눈다.
+#   1) 표지     : 시리즈 번호 + 무엇을 해결하는지
+#   2) 프롬프트 : 그대로 복사해 쓸 문장 (본문 글에도 같은 문장이 들어간다)
+#   3) 결과 예시 : "이렇게 나와요"
+#   4) 팁·팔로우 : 한 가지 더 + 팔로우 안내
+#
+# 카드 데이터 형식:
+#   {"series": "복붙 프롬프트 #12", "headline": "...", "situation": "...",
+#    "prompt": "...", "example": "...", "tip": "..."}
+
+SLIDE_TOTAL = 4
+
+
+def _slide_start(badge_text):
+    img = _background()
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    draw = ImageDraw.Draw(img)
+    texts = []
+    badge_font = _font(34, b"ExtraBold")
+    bw = _tw(draw, badge_text, badge_font) + 56
+    od.rounded_rectangle([PAD, 84, PAD + bw, 148], radius=32, fill=PALETTE["badge_bg"] + (255,))
+    texts.append(((PAD + 28, 93), badge_text, badge_font, PALETTE["badge_ink"]))
+    _sparkle(od, W - PAD - 40, 116, 22, PALETTE["lilac"] + (255,))
+    _sparkle(od, W - PAD - 92, 94, 10, PALETTE["lavender"] + (255,))
+    return img, overlay, od, draw, texts
+
+
+def _slide_finish(img, overlay, texts, page, out_path):
+    img = Image.alpha_composite(img, overlay)
+    draw = ImageDraw.Draw(img)
+    for xy, text, font, fill in texts:
+        draw.text(xy, text, font=font, fill=fill)
+    foot_y = H - 92
+    draw.line([PAD, foot_y - 26, W - PAD, foot_y - 26], fill=(255, 255, 255, 70), width=2)
+    page_font = _font(30, b"Medium")
+    brand_font = _font(32, b"ExtraBold")
+    draw.text((PAD, foot_y), f"{page} / {SLIDE_TOTAL}", font=page_font, fill=PALETTE["lavender"])
+    brand = "@sodam_ai_lab"
+    draw.text((W - PAD - _tw(draw, brand, brand_font), foot_y - 2), brand, font=brand_font, fill=PALETTE["white"])
+    img.convert("RGB").save(out_path, "PNG", optimize=True)
+    return out_path
+
+
+def _fit_block(draw, text, weight, max_width, max_height, sizes, spacing=1.5):
+    """여러 줄 글(줄바꿈 포함)이 max_height 안에 들어가는 가장 큰 글자 크기를 고른다."""
+    for size in sizes:
+        font = _font(size, weight)
+        lines = []
+        for para in (text or "").split("\n"):
+            lines += _wrap(draw, para, font, max_width) if para.strip() else [""]
+        line_h = int(size * spacing)
+        if len(lines) * line_h <= max_height:
+            return font, lines, line_h
+    font = _font(sizes[-1], weight)
+    line_h = int(sizes[-1] * spacing)
+    lines = []
+    for para in (text or "").split("\n"):
+        lines += _wrap(draw, para, font, max_width) if para.strip() else [""]
+    keep = max(1, max_height // line_h)
+    if len(lines) > keep:
+        lines = lines[:keep]
+        lines[-1] = _ellipsize(draw, lines[-1] + "…", font, max_width)
+    return font, lines, line_h
+
+
+def _slide_panel_text(data_text, badge, title, out_path, page, note=""):
+    """'제목 + 큰 패널 안 본문' 형태의 슬라이드(프롬프트·결과 예시 공용)."""
+    img, overlay, od, draw, texts = _slide_start(badge)
+    inner_w = W - PAD * 2
+    title_font, title_lines, title_size = _fit(draw, title, b"Black", inner_w, 2, (60, 54, 48))
+    y = 196
+    for i, ln in enumerate(title_lines):
+        texts.append(((PAD, y + i * int(title_size * 1.28)), ln, title_font, PALETTE["white"]))
+    y += int(title_size * 1.28) * len(title_lines) + 28
+
+    max_bottom = H - 190 - (60 if note else 0)
+    pad = 44
+    font, lines, line_h = _fit_block(draw, data_text, b"Bold", inner_w - pad * 2,
+                                     max_bottom - y - pad * 2, (46, 42, 38, 34, 30, 27))
+    panel_bottom = min(max_bottom, y + pad * 2 + len(lines) * line_h + 8)
+    od.rounded_rectangle([PAD, y, W - PAD, panel_bottom], radius=36,
+                         fill=PALETTE["panel"], outline=PALETTE["panel_line"], width=2)
+    ty = y + pad
+    for ln in lines:
+        texts.append(((PAD + pad, ty), ln, font, PALETTE["white"]))
+        ty += line_h
+    if note:
+        note_font = _font(28, b"Medium")
+        texts.append(((PAD, panel_bottom + 22), _ellipsize(draw, note, note_font, inner_w), note_font, PALETTE["lavender"]))
+    return _slide_finish(img, overlay, texts, page, out_path)
+
+
+def generate_prompt_slides(data, out_dir, stem="slide"):
+    """복붙 프롬프트 카드 4장을 out_dir에 만들고 파일 경로 목록을 돌려준다."""
+    os.makedirs(out_dir, exist_ok=True)
+    paths = [os.path.join(out_dir, f"{stem}_{i}.png") for i in range(1, SLIDE_TOTAL + 1)]
+    inner_w = W - PAD * 2
+
+    # 1) 표지
+    img, overlay, od, draw, texts = _slide_start(data.get("series", "복붙 프롬프트"))
+    head_font, head_lines, head_size = _fit(draw, data["headline"], b"Black", inner_w, 4, (92, 84, 76, 68, 60))
+    line_h = int(head_size * 1.28)
+    y = 330
+    for i, ln in enumerate(head_lines):
+        texts.append(((PAD, y + i * line_h), ln, head_font, PALETTE["white"]))
+    y += line_h * len(head_lines) + 40
+    sit = (data.get("situation") or "").strip()
+    if sit:
+        sit_font, sit_lines, sit_h = _fit_block(draw, sit, b"Medium", inner_w, 190, (42, 38, 34), spacing=1.45)
+        for ln in sit_lines:
+            texts.append(((PAD, y), ln, sit_font, PALETTE["lavender"]))
+            y += sit_h
+    hint = "옆으로 넘겨서 확인하세요  →"
+    hint_font = _font(36, b"ExtraBold")
+    hw = _tw(draw, hint, hint_font) + 64
+    od.rounded_rectangle([PAD, H - 290, PAD + hw, H - 290 + 84], radius=42, fill=PALETTE["action_bg"] + (255,))
+    texts.append(((PAD + 32, H - 290 + 17), hint, hint_font, PALETTE["action_ink"]))
+    _slide_finish(img, overlay, texts, 1, paths[0])
+
+    # 2) 프롬프트
+    _slide_panel_text(data["prompt"], "복사해서 쓰세요", "이 문장을 그대로 붙여넣으세요", paths[1], 2,
+                      note="글 본문에도 같은 문장이 있어요. 거기서 복사하셔도 돼요")
+    # 3) 결과 예시
+    _slide_panel_text(data["example"], "이렇게 나와요", "이런 결과가 나와요", paths[2], 3,
+                      note="※ 예시예요. 넣는 내용에 따라 결과는 달라져요")
+
+    # 4) 팁 + 팔로우
+    img, overlay, od, draw, texts = _slide_start("한 가지 더")
+    y = 210
+    tip = (data.get("tip") or "").strip()
+    tip_font, tip_lines, tip_h = _fit_block(draw, tip, b"Bold", inner_w - 72, 420, (46, 42, 38, 34), spacing=1.5)
+    box_h = 72 + len(tip_lines) * tip_h + 40
+    od.rounded_rectangle([PAD, y, W - PAD, y + box_h], radius=36, fill=PALETTE["action_bg"] + (255,))
+    label_font = _font(30, b"ExtraBold")
+    label = "더 잘 쓰는 팁"
+    lw = _tw(draw, label, label_font) + 36
+    od.rounded_rectangle([PAD + 36, y + 28, PAD + 36 + lw, y + 28 + 48], radius=24, fill=PALETTE["badge_ink"] + (255,))
+    texts.append(((PAD + 54, y + 33), label, label_font, PALETTE["white"]))
+    ty = y + 28 + 48 + 22
+    for ln in tip_lines:
+        texts.append(((PAD + 36, ty), ln, tip_font, PALETTE["action_ink"]))
+        ty += tip_h
+    y += box_h + 44
+
+    fh = min(H - 190 - y, 400)
+    od.rounded_rectangle([PAD, y, W - PAD, y + fh], radius=36, fill=PALETTE["panel"], outline=PALETTE["panel_line"], width=2)
+    f1 = _font(46, b"Black")
+    f2 = _font(34, b"Medium")
+    f3 = _font(44, b"ExtraBold")
+    cx = W // 2
+    line1 = "저장해두고 필요할 때 꺼내 쓰세요"
+    if _tw(draw, line1, f1) > inner_w - 40:
+        line1 = "저장해두고 꺼내 쓰세요"
+    texts.append(((cx - _tw(draw, line1, f1) / 2, y + 62), line1, f1, PALETTE["white"]))
+    sub = "매일 아침·저녁, 쉬운 AI 활용법을 올려요"
+    texts.append(((cx - _tw(draw, sub, f2) / 2, y + 144), sub, f2, PALETTE["lavender"]))
+    handle = "@sodam_ai_lab 팔로우"
+    texts.append(((cx - _tw(draw, handle, f3) / 2, y + fh - 118), handle, f3, PALETTE["lilac"]))
+    _slide_finish(img, overlay, texts, 4, paths[3])
+    return paths
