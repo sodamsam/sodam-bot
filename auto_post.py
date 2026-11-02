@@ -49,8 +49,10 @@ POSTED_LOG_COLUMNS = [
 TOPIC_DOC_FILE = os.path.join(os.path.dirname(__file__), "docs", "글감_발행목록.md")
 
 # 발행 시간대 정의 (KST 기준)
-PRIMARY_HOURS = (7, 8, 9)      # 07:00 ~ 09:59
-BACKUP_HOURS = (18, 19, 20)    # 18:00 ~ 20:59
+# 외부 서비스(cron-job.org)가 정시에 깨우면 07시·19시대에 바로 올라간다. 그 호출이 끊겼을 때도 GitHub 자체
+# 스케줄(몇 시간씩 밀리는 일이 흔함)이 늦게라도 발행할 수 있도록 허용 시간대를 넉넉하게 둔다.
+PRIMARY_HOURS = (7, 8, 9, 10, 11, 12)     # 07:00 ~ 12:59 (아침 글)
+BACKUP_HOURS = (18, 19, 20, 21, 22)       # 18:00 ~ 22:59 (저녁 코너 / 아침을 놓쳤을 때 대신 발행)
 
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"

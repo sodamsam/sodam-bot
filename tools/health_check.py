@@ -28,25 +28,36 @@ POSTED_FILE = os.path.join(ROOT, "state", "posted.json")
 COMMENT_BOT_STALE_HOURS = 1.5
 
 
+def target_day(now_kst):
+    """검사할 '하루'를 정한다.
+
+    GitHub 무료 스케줄은 몇 시간씩 늦게 도는 일이 많아, 밤 21시로 잡아둔 이 점검이 새벽 2~6시에 실행되곤 한다.
+    그때의 "오늘"은 아직 아무 글도 안 나간 새 날이라 매일 가짜 실패가 났다. 그래서 21시 이후면 오늘을,
+    그 전이면 이미 끝난 어제를 검사한다.
+    """
+    day = now_kst if now_kst.hour >= 21 else now_kst - datetime.timedelta(days=1)
+    return day
+
+
 def check_posted_today(state, now_kst):
-    """오늘 날짜로 발행 기록이 있는지. (ok, 메시지)"""
-    today = now_kst.strftime("%Y-%m-%d")
+    """검사 대상 날짜(target_day)의 아침 글 발행 기록이 있는지. (ok, 메시지)"""
+    today = target_day(now_kst).strftime("%Y-%m-%d")
     entry = (state.get("posted") or {}).get(today)
     if entry:
-        return True, f"오늘({today}) 발행 확인: {entry.get('type', '?')} / post_id={entry.get('post_id', '?')}"
-    return False, f"오늘({today}) 발행 기록이 없습니다. 발행 시간대(07~09시, 18~20시)가 모두 지났는데 글이 안 올라갔어요"
+        return True, f"{today} 발행 확인: {entry.get('type', '?')} / post_id={entry.get('post_id', '?')}"
+    return False, f"{today} 발행 기록이 없습니다. 발행 시간대(07~09시, 18~20시)가 모두 지났는데 글이 안 올라갔어요"
 
 
 def check_evening_posted(state, now_kst):
     """오늘 저녁 코너 글이 발행됐는지. 아침 글을 놓쳐 저녁에 대신 발행한 날은 저녁 코너가 쉬는 게 정상이다."""
-    today = now_kst.strftime("%Y-%m-%d")
+    today = target_day(now_kst).strftime("%Y-%m-%d")
     entry = (state.get("posted") or {}).get(f"{today}-evening")
     if entry and entry.get("type") in corners.EVENING_KINDS:
-        return True, f"오늘({today}) 저녁 코너 발행 확인: {entry['type']}"
+        return True, f"{today} 저녁 코너 발행 확인: {entry['type']}"
     if entry:
-        return False, (f"오늘({today}) 저녁 코너를 만들지 못해 대체 글({entry.get('type')})이 나갔습니다. "
+        return False, (f"{today} 저녁 코너를 만들지 못해 대체 글({entry.get('type')})이 나갔습니다. "
                        "반복되면 Actions 로그의 [저녁 코너] 줄을 확인하세요")
-    return False, f"오늘({today}) 저녁 코너 발행 기록이 없습니다 (아침 글을 놓쳐 저녁에 대신 발행한 날이면 정상)"
+    return False, f"{today} 저녁 코너 발행 기록이 없습니다 (아침 글을 놓쳐 저녁에 대신 발행한 날이면 정상)"
 
 
 def check_comment_bot_recency(last_run_iso, now_utc, max_hours=COMMENT_BOT_STALE_HOURS):

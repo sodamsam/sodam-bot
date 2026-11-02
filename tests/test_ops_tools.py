@@ -130,3 +130,21 @@ def test_evening_fallback_post_is_reported():
     state = {"posted": {"2026-10-26-evening": {"type": "open"}}}
     ok, msg = health_check.check_evening_posted(state, _kst(2026, 10, 26))
     assert not ok and "대체 글" in msg
+
+
+def test_delayed_early_morning_run_checks_yesterday_not_the_new_day():
+    """GitHub이 밤 21시 점검을 새벽에 늦게 돌려도, 아직 글이 안 나간 '새 날'을 검사해 가짜 실패를 내면 안 된다."""
+    state = {"posted": {"2026-11-02": {"type": "open", "post_id": "1"},
+                        "2026-11-02-evening": {"type": "term", "post_id": "2"}}}
+    early = datetime.datetime(2026, 11, 3, 6, 40, tzinfo=KST)
+    assert health_check.check_posted_today(state, early)[0]
+    assert health_check.check_evening_posted(state, early)[0]
+
+
+def test_real_missing_post_is_still_caught_at_any_hour():
+    state = {"posted": {"2026-10-28": {"type": "briefing", "post_id": "1"}}}
+    early = datetime.datetime(2026, 11, 3, 6, 40, tzinfo=KST)    # 11/02에 글이 없음
+    ok, msg = health_check.check_posted_today(state, early)
+    assert not ok and "2026-11-02" in msg
+    late = datetime.datetime(2026, 11, 3, 21, 10, tzinfo=KST)    # 21시 이후엔 오늘(11/03)을 검사
+    assert "2026-11-03" in health_check.check_posted_today(state, late)[1]
