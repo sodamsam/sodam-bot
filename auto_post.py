@@ -36,6 +36,7 @@ import card_news
 import config
 import corners
 import cta
+import hotnews
 import instagram_api
 import notion_api
 import prompt_queue
@@ -125,12 +126,15 @@ def load_posted():
     data.setdefault("cta_seq", 0)
     data.setdefault("material_check", {})
     data.setdefault("corner_seq", {})
+    data.setdefault("news_used", [])
+    data.setdefault("last_news_date", "")
     return data
 
 
 def save_posted(state):
     os.makedirs(os.path.dirname(POSTED_FILE), exist_ok=True)
     state["used_titles"] = state["used_titles"][-100:]
+    state["news_used"] = state.get("news_used", [])[-40:]
     keys = sorted(state["posted"].keys())[-60:]
     state["posted"] = {k: state["posted"][k] for k in keys}
     with open(POSTED_FILE, "w", encoding="utf-8") as f:
@@ -753,6 +757,13 @@ def _parse_point(raw):
 
 def _gen_briefing_draft(item, extra_prompt=""):
     """브리핑 초안을 만든다. 반환: (card_dict, 본문 텍스트). 형식이 깨지면 (None, None)."""
+    lang_note = ""
+    if item.get("lang") == "en":
+        lang_note = (
+            "\n\n[기사 언어 안내]\n"
+            "대표 기사와 관련 기사는 영어 기사 제목입니다. 한국어로 옮기되 회사·제품 이름(예: Claude, ChatGPT)은 영어 그대로 쓰고, "
+            "제목에 적힌 사실만 사용하세요. 여러 매체가 같은 소식을 다뤘다는 점은 말해도 됩니다. "
+            "제목만으로 알 수 없는 세부(가격, 날짜, 제공 국가, 기능 범위)는 쓰지 말고 '제공 범위는 계정·국가에 따라 달라요'처럼 일반적으로 안내하세요.")
     related_lines = "\n".join(
         f"- {r['title']} {r.get('summary', '')}" for r in item.get("related", [])
     ) or "(없음)"
@@ -813,7 +824,7 @@ def _gen_briefing_draft(item, extra_prompt=""):
 [어조 규칙]
 - 부드럽고 친근한 존댓말, 명령·경고·과장·어그로 금지, 질문으로 끝내지 않기
 - [본문]은 250~400자(공백 포함), 한 줄 20자 이내, 단락 사이 빈 줄, 이모지 1개, 해시태그·링크·인사말 금지
-{extra_prompt}"""
+{lang_note}{extra_prompt}"""
     raw = _call_gemini(prompt, max_tokens=1400)
     parts = _split_markers(raw, ("분류", "카드제목", "포인트1", "포인트2", "포인트3", "행동라벨", "행동", "본문"))
 
@@ -848,18 +859,33 @@ def _card_text(card):
     return " ".join(chunks)
 
 
-def run_briefing(date_str, now_kst):
+def run_briefing(date_str, now_kst, state=None, hot_only=False):
     """브리핑 소재 선정 → 카드 이미지 생성·공개 → 발행용 데이터 구성까지 한 번에 처리한다.
 
     성공하면 {"text", "image_url", "topic"} 딕셔너리, 이번 주 소재가 없으면 None.
     (호출부에서 None이면 howto로 대체한다.)
     """
+    briefing_item = None
+    if state is not None:
+        briefing_item = hotnews.pick_hot_item(used_titles=state.get("news_used", []))
+        if briefing_item:
+            briefing_draft = write_briefing_post(briefing_item, now_kst)
+            if briefing_draft:
+                return _finish_briefing(briefing_item, briefing_draft, date_str)
+            print("[핫뉴스] 글 검증을 통과하지 못해 포기합니다")
+        if hot_only:
+            return None
     briefing_item = pick_briefing_item(date_str)
     if not briefing_item:
         return None
     briefing_draft = write_briefing_post(briefing_item, now_kst)
     if not briefing_draft:
         return None
+    return _finish_briefing(briefing_item, briefing_draft, date_str)
+
+
+def _finish_briefing(briefing_item, briefing_draft, date_str):
+    """검증을 통과한 초안에 날짜·출처를 붙이고 카드 이미지를 만들어 공개한다."""
 
     card, briefing_text = briefing_draft
 
@@ -902,7 +928,8 @@ def write_briefing_post(item, now_kst):
         if not card:
             problems = ["출력 형식(마커·포인트 '제목 | 설명')을 정확히 지킬 것"]
             continue
-        problems = find_fabrications(text + " " + _card_text(card), source_text)
+        checker = hotnews.find_fabrications_en if item.get("lang") == "en" else find_fabrications
+        problems = checker(text + " " + _card_text(card), source_text)
         if not problems:
             print(f"[브리핑 검증] {attempt}차 통과")
             return card, text
@@ -1491,6 +1518,7 @@ def main():
     extra_comments = []
     queue_result = None      # open/lead일 때만 채워짐 (발행 기록용 topic/keyword/cta_idx/queue_left)
     howto_keyword = None     # howto일 때만 채워짐 (발행 성공 시 howto_used에 기록)
+    news_inserted = False    # 순환 큐와 별개로 끼워 넣은 핫뉴스 카드 (순환 큐 순서를 밀지 않는다)
 
     if slot == "evening":
         ev = run_evening(state, now_kst, date_str,
@@ -1513,7 +1541,7 @@ def main():
     elif forced_type == "briefing":
         # 테스트/수동 지정 목적: 순환 큐를 기다리지 않고 곧장 브리핑 카드뉴스로 발행
         print("[강제 지정] POST_TYPE=briefing — 혜택/순환 큐 판단 없이 곧장 진행")
-        briefing_result = run_briefing(date_str, now_kst)
+        briefing_result = run_briefing(date_str, now_kst, state=state)
         if not briefing_result:
             raise SystemExit("[브리핑 테스트 실패] 이번 주 조건에 맞는 AI 정책·브리핑 소재를 찾지 못했습니다")
         text = briefing_result["text"]
@@ -1530,6 +1558,16 @@ def main():
                 text = benefit_text
                 state["used_titles"].append(benefit_item["title"])
 
+        if not content_type and hotnews.news_due(state, now_kst.date()):
+            hot = run_briefing(date_str, now_kst, state=state, hot_only=True)
+            if hot:
+                text = hot["text"]
+                image_urls = [hot["image_url"]]
+                ig_image_urls = [hot["ig_image_url"]]
+                briefing_topic = hot["topic"]
+                content_type = "briefing"
+                news_inserted = True
+
         if not content_type:
             kind = POST_CYCLE[state["cycle_index"] % len(POST_CYCLE)]
             if kind == "prompt":
@@ -1537,7 +1575,7 @@ def main():
                 text = queue_result["text"]
                 content_type = queue_result["post_type"]
             elif kind == "briefing":
-                briefing_result = run_briefing(date_str, now_kst)
+                briefing_result = run_briefing(date_str, now_kst, state=state)
                 if briefing_result:
                     text = briefing_result["text"]
                     image_urls = [briefing_result["image_url"]]
@@ -1601,7 +1639,7 @@ def main():
     if instagram_id:
         state["posted"][key]["instagram_id"] = instagram_id
     if slot == "morning":
-        if content_type != "benefit":
+        if content_type != "benefit" and not news_inserted:
             state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)
         if content_type == "prompt":
             state["prompt_seq"] = state.get("prompt_seq", 0) + 1
@@ -1610,6 +1648,9 @@ def main():
     elif evening_kind:
         seqs = state.setdefault("corner_seq", {})
         seqs[evening_kind] = seqs.get(evening_kind, 0) + 1
+    if content_type == "briefing":
+        state["last_news_date"] = date_str
+        state.setdefault("news_used", []).append(briefing_topic or "")
     state["cta_seq"] = state.get("cta_seq", 0) + 1
     save_posted(state)
 

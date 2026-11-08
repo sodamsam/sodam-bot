@@ -19,6 +19,7 @@ import pytest
 
 import auto_post
 import cta
+import hotnews
 
 
 @pytest.fixture(autouse=True)
@@ -27,3 +28,9 @@ def isolate_repo_files(tmp_path, monkeypatch):
     monkeypatch.setattr(auto_post, "POSTED_LOG_FILE", str(tmp_path / "posted_log.csv"))
     monkeypatch.setattr(auto_post, "TOPIC_DOC_FILE", str(tmp_path / "글감_발행목록.md"))
     monkeypatch.setattr(cta, "LAST_CTA_FILE", str(tmp_path / "last_cta.json"))
+
+
+@pytest.fixture(autouse=True)
+def no_real_news_fetch(monkeypatch):
+    """테스트가 실제 인터넷(구글 뉴스)에서 핫뉴스를 가져오지 않게 막는다. 필요한 테스트가 직접 다시 지정한다."""
+    monkeypatch.setattr(hotnews, "fetch_global", lambda *a, **k: [])
