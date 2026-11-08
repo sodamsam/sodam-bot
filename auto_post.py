@@ -36,6 +36,7 @@ import card_news
 import config
 import corners
 import cta
+import instagram_api
 import notion_api
 import prompt_queue
 import threads_api
@@ -875,8 +876,9 @@ def run_briefing(date_str, now_kst):
 
     local_path = os.path.join(_card_dir(), f"briefing_{date_str}.png")
     card_news.generate_news_card(card, local_path)
-    image_url = _publish_card_image(local_path)
-    return {"text": briefing_text, "image_url": image_url, "topic": briefing_item["title"]}
+    png_url, jpg_url = _publish_card_files([local_path, card_news.save_jpeg_copy(local_path)])
+    return {"text": briefing_text, "image_url": png_url, "ig_image_url": jpg_url,
+            "topic": briefing_item["title"]}
 
 
 def write_briefing_post(item, now_kst):
@@ -1412,12 +1414,15 @@ def run_evening(state, now_kst, date_str, forced=None):
     result = corners.write_evening_post(state, now_kst, forced=forced)
     if not result:
         return None
-    image_urls = []
+    image_urls, ig_image_urls = [], []
     if result["card"]:
         out_dir = os.path.join(_card_dir(), f"{result['kind']}_{date_str}")
         paths = card_news.generate_prompt_slides(result["card"], out_dir, stem=result["kind"])
-        image_urls = _publish_card_files(paths)
+        jpgs = [card_news.save_jpeg_copy(pth) for pth in paths]
+        urls = _publish_card_files(paths + jpgs)
+        image_urls, ig_image_urls = urls[:len(paths)], urls[len(paths):]
     result["image_urls"] = image_urls
+    result["ig_image_urls"] = ig_image_urls
     return result
 
 
@@ -1479,6 +1484,7 @@ def main():
     content_type = None
     text = None
     image_urls = []          # 카드뉴스 이미지 공개 URL (브리핑 1장 / 프롬프트 카드 4장)
+    ig_image_urls = []       # 같은 카드의 JPEG 사본 URL (인스타용)
     briefing_topic = None    # briefing일 때만 채워짐 (발행 기록용)
     log_topic = ""           # 저녁 코너 주제 (발행 기록용)
     evening_kind = None      # 저녁 코너로 발행됐을 때만 채워짐 (연재 번호 증가용)
@@ -1491,6 +1497,7 @@ def main():
                          forced=forced_type if forced_type in corners.EVENING_KINDS else None)
         if ev:
             text, content_type, image_urls = ev["text"], ev["kind"], ev["image_urls"]
+            ig_image_urls = ev.get("ig_image_urls", [])
             log_topic, evening_kind = ev["topic"], ev["kind"]
         else:
             print("[저녁 코너] 이번엔 만들지 못해 검증된 프롬프트 글로 대체합니다")
@@ -1511,6 +1518,7 @@ def main():
             raise SystemExit("[브리핑 테스트 실패] 이번 주 조건에 맞는 AI 정책·브리핑 소재를 찾지 못했습니다")
         text = briefing_result["text"]
         image_urls = [briefing_result["image_url"]]
+        ig_image_urls = [briefing_result["ig_image_url"]]
         briefing_topic = briefing_result["topic"]
         content_type = "briefing"
     else:
@@ -1533,6 +1541,7 @@ def main():
                 if briefing_result:
                     text = briefing_result["text"]
                     image_urls = [briefing_result["image_url"]]
+                    ig_image_urls = [briefing_result["ig_image_url"]]
                     briefing_topic = briefing_result["topic"]
                     content_type = "briefing"
                 else:
@@ -1559,6 +1568,14 @@ def main():
     post_id = publish_post(text, image_urls, topic_tag)
     print(f"[발행 완료] post id: {post_id}")
 
+    instagram_id = None
+    if ig_image_urls and instagram_api.enabled():
+        try:
+            instagram_id = instagram_api.publish_cards(ig_image_urls, text, content_type)
+            print(f"[인스타 발행 완료] media id: {instagram_id}")
+        except Exception as e:   # 스레드 글은 이미 나갔으므로 인스타 실패가 하루 발행을 실패로 만들지 않는다
+            print(f"::warning::인스타 발행 실패 (스레드 글은 정상 발행됨): {e}")
+
     append_posted_log({
         "date_kst": now_kst.isoformat(),
         "post_type": content_type,
@@ -1581,6 +1598,8 @@ def main():
                 print(f"[경고] 댓글 {i} 발행 실패 (본문은 정상 발행됨): {e}")
 
     state["posted"][key] = {"time": now_kst.isoformat(), "post_id": post_id, "type": content_type}
+    if instagram_id:
+        state["posted"][key]["instagram_id"] = instagram_id
     if slot == "morning":
         if content_type != "benefit":
             state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)

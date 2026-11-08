@@ -96,8 +96,8 @@ def test_main_does_not_store_when_new_token_rejected(monkeypatch, capsys):
     monkeypatch.setenv("THREADS_ACCESS_TOKEN", "OLD")
     monkeypatch.setenv("GH_ADMIN_TOKEN", "ADMIN")
     monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
-    monkeypatch.setattr(rotate, "refresh_token", lambda t: ("NEW", 5184000))
-    monkeypatch.setattr(rotate, "token_works", lambda t: False)
+    monkeypatch.setattr(rotate, "refresh_token", lambda t, *a: ("NEW", 5184000))
+    monkeypatch.setattr(rotate, "token_works", lambda t, *a: False)
     stored = []
     monkeypatch.setattr(rotate, "store_secret", lambda *a: stored.append(a))
     assert rotate.main() == 1
@@ -108,12 +108,12 @@ def test_main_success_masks_and_stores(monkeypatch, capsys):
     monkeypatch.setenv("THREADS_ACCESS_TOKEN", "OLD")
     monkeypatch.setenv("GH_ADMIN_TOKEN", "ADMIN")
     monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
-    monkeypatch.setattr(rotate, "refresh_token", lambda t: ("NEW-SECRET", 5184000))
-    monkeypatch.setattr(rotate, "token_works", lambda t: True)
+    monkeypatch.setattr(rotate, "refresh_token", lambda t, *a: ("NEW-SECRET", 5184000))
+    monkeypatch.setattr(rotate, "token_works", lambda t, *a: True)
     stored = []
     monkeypatch.setattr(rotate, "store_secret", lambda *a: stored.append(a))
     assert rotate.main() == 0
-    assert stored == [("NEW-SECRET", "o/r", "ADMIN")]
+    assert stored == [("NEW-SECRET", "o/r", "ADMIN", "THREADS_ACCESS_TOKEN")]
     out = capsys.readouterr().out
     assert "::add-mask::NEW-SECRET" in out
     assert out.count("NEW-SECRET") == 1  # 마스킹 지시줄 외에는 값이 출력되지 않아야 함

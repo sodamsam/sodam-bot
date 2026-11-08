@@ -94,6 +94,17 @@ def check_threads_token(token):
     return False, f"Threads 토큰 오류: {r.status_code} {r.text[:200]}"
 
 
+def check_instagram_token(token):
+    """인스타 토큰이 통하는지. 토큰이 없으면 인스타 미사용이므로 None."""
+    if not token:
+        return None
+    r = requests.get("https://graph.instagram.com/v21.0/me",
+                     params={"fields": "id,username", "access_token": token}, timeout=30)
+    if r.ok:
+        return True, f"인스타 토큰 정상 (@{r.json().get('username', '?')})"
+    return False, f"인스타 토큰 오류(인스타 발행만 멈춤, 스레드는 정상): {r.status_code} {r.text[:200]}"
+
+
 def main():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     now_kst = now_utc.astimezone(KST)
@@ -112,6 +123,10 @@ def main():
 
     ok, msg = check_threads_token(os.environ.get("THREADS_ACCESS_TOKEN", ""))
     (lines if ok else failures).append(msg)
+
+    ig = check_instagram_token(os.environ.get("INSTAGRAM_ACCESS_TOKEN", ""))
+    if ig:
+        (lines if ig[0] else warnings).append(ig[1])
 
     repo = os.environ.get("GITHUB_REPOSITORY", "sodamsam/sodam-bot")
     try:

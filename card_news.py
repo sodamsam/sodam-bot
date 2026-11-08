@@ -274,6 +274,13 @@ def generate_news_card(data, out_path):
     return out_path
 
 
+def save_jpeg_copy(png_path, quality=93):
+    """PNG 카드의 JPEG 사본을 같은 폴더에 만들고 경로를 돌려준다 (인스타는 JPEG만 받는다)."""
+    jpg_path = os.path.splitext(png_path)[0] + ".jpg"
+    Image.open(png_path).convert("RGB").save(jpg_path, "JPEG", quality=quality, optimize=True)
+    return jpg_path
+
+
 def generate_card(headline, eyebrow, out_path):
     """예전 호출 방식(제목+라벨) 호환용 — 포인트 없이 헤드라인만 있는 카드를 만든다."""
     return generate_news_card({"category": eyebrow, "headline": headline}, out_path)
