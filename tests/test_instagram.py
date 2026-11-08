@@ -29,6 +29,7 @@ def ig(monkeypatch):
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "tok")
     monkeypatch.setenv("INSTAGRAM_USER_ID", "123")
     monkeypatch.setattr(instagram_api.time, "sleep", lambda *a, **k: None)
+    instagram_api._account_cache.clear()
     calls = {"post": [], "get": []}
     n = {"i": 0}
 
@@ -39,21 +40,27 @@ def ig(monkeypatch):
 
     def get(url, params=None, timeout=None):
         calls["get"].append((url, dict(params)))
-        return Resp({"status_code": calls.get("status", "FINISHED")})
+        return Resp({"status_code": calls.get("status", "FINISHED"), "user_id": "123", "username": "sodam_ai_lab"})
 
     monkeypatch.setattr(instagram_api.requests, "post", post)
     monkeypatch.setattr(instagram_api.requests, "get", get)
     return calls
 
 
-def test_disabled_without_credentials(monkeypatch):
+def test_enabled_needs_only_the_token(monkeypatch):
     monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("INSTAGRAM_USER_ID", raising=False)
     assert instagram_api.enabled() is False
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "t")
-    assert instagram_api.enabled() is False       # 둘 다 있어야 켜진다
-    monkeypatch.setenv("INSTAGRAM_USER_ID", "1")
-    assert instagram_api.enabled() is True
+    assert instagram_api.enabled() is True        # 계정 번호는 토큰으로 알아내므로 INSTAGRAM_USER_ID는 없어도 된다
+
+
+def test_account_id_comes_from_the_token_not_the_secret(ig, monkeypatch):
+    monkeypatch.setenv("INSTAGRAM_USER_ID", "1129090112816803")      # 앱 ID를 잘못 넣은 경우
+    instagram_api._account_cache.clear()
+    instagram_api.publish_cards(["https://x/1.jpg"], "본문", "briefing")
+    media_create = [p for p in ig["post"] if p[0].endswith("/media")][0]
+    assert "/123/media" in media_create[0] and "1129090112816803" not in media_create[0]   # /me가 알려준 번호 123을 쓴다
 
 
 def test_caption_has_hashtags_and_respects_limit():

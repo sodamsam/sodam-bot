@@ -2,7 +2,9 @@
 """인스타그램 피드 발행 (Instagram API with Instagram Login, graph.instagram.com).
 
 카드뉴스(여러 장/한 장)를 스레드에 올린 직후 같은 카드를 인스타 피드에도 올린다.
-INSTAGRAM_ACCESS_TOKEN / INSTAGRAM_USER_ID가 없으면 아무 일도 하지 않는다(enabled()가 False).
+INSTAGRAM_ACCESS_TOKEN이 없으면 아무 일도 하지 않는다(enabled()가 False).
+게시할 계정 번호는 토큰으로 /me를 조회해 직접 알아낸다(INSTAGRAM_USER_ID는 없어도 되고, 틀려도 영향 없음).
+Meta 화면에는 앱별 번호와 인스타 계정 번호가 함께 보여 헷갈리기 쉬워서, 사람이 넣는 값에 기대지 않는다.
 
 인스타 API 제약
   - 이미지는 JPEG만 가능하고 공개 URL이어야 한다 (그래서 카드의 JPEG 사본을 저장소에 함께 올린다)
@@ -34,7 +36,19 @@ def _user_id():
 
 
 def enabled():
-    return bool(_token() and _user_id())
+    return bool(_token())
+
+
+_account_cache = {}
+
+
+def account_id():
+    """토큰이 가리키는 인스타 프로페셔널 계정 번호(user_id). 같은 토큰이면 한 번만 조회한다."""
+    token = _token()
+    if _account_cache.get("token") != token:
+        info = _request("GET", "/me", {"fields": "user_id,username"})
+        _account_cache.update(token=token, id=info.get("user_id") or info.get("id") or _user_id())
+    return _account_cache["id"]
 
 
 def _request(method, path, params):
@@ -70,7 +84,7 @@ def build_caption(text, content_type):
 
 def publish_image(image_url, caption):
     """한 장짜리 피드 게시물."""
-    uid = _user_id()
+    uid = account_id()
     container = _request("POST", f"/{uid}/media", {"image_url": image_url, "caption": caption})
     _wait_ready(container["id"])
     return _request("POST", f"/{uid}/media_publish", {"creation_id": container["id"]}).get("id")
@@ -80,7 +94,7 @@ def publish_carousel(image_urls, caption):
     """여러 장 넘겨보는 피드 게시물 (2~10장)."""
     if not 2 <= len(image_urls) <= 10:
         raise ValueError("인스타 캐러셀은 이미지 2~10장이 필요합니다")
-    uid = _user_id()
+    uid = account_id()
     child_ids = []
     for url in image_urls:
         child = _request("POST", f"/{uid}/media", {"image_url": url, "is_carousel_item": "true"})
