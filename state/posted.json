@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-09-16": {
-      "time": "2026-09-16T07:00:38.835407+09:00",
-      "post_id": "18126670321697134",
-      "type": "open"
-    },
     "2026-09-17": {
       "time": "2026-09-17T07:00:42.648870+09:00",
       "post_id": "18119875531980998",
@@ -300,6 +295,12 @@
       "time": "2026-11-10T19:00:46.977989+09:00",
       "post_id": "18110710934231498",
       "type": "term"
+    },
+    "2026-11-11": {
+      "time": "2026-11-11T07:00:47.846640+09:00",
+      "post_id": "18421768222088424",
+      "type": "briefing",
+      "instagram_id": "17915640687283102"
     }
   },
   "used_titles": [
@@ -397,7 +398,7 @@
   ],
   "cycle_index": 4,
   "prompt_seq": 4,
-  "cta_seq": 89,
+  "cta_seq": 90,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -460,7 +461,8 @@
     "tip": 1
   },
   "news_used": [
-    "AP sources: Staff at U.S. center for AI safety are reporting to the White House, raising independence concerns"
+    "AP sources: Staff at U.S. center for AI safety are reporting to the White House, raising independence concerns",
+    "Google Cloud Launches Gemini for Healthcare as an Enterprise Agentic Orchestration Layer"
   ],
-  "last_news_date": "2026-11-09"
+  "last_news_date": "2026-11-11"
 }
