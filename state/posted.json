@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-09-20": {
-      "time": "2026-09-20T07:00:36.425303+09:00",
-      "post_id": "18126128611828409",
-      "type": "open"
-    },
     "2026-09-21": {
       "time": "2026-09-21T07:00:39.332338+09:00",
       "post_id": "18411645583081141",
@@ -302,6 +297,12 @@
       "post_id": "17977994033944260",
       "type": "card_prompt",
       "instagram_id": "18057258422666309"
+    },
+    "2026-11-13": {
+      "time": "2026-11-13T07:00:45.288451+09:00",
+      "post_id": "17907706407656568",
+      "type": "briefing",
+      "instagram_id": "18113403491236124"
     }
   },
   "used_titles": [
@@ -399,7 +400,7 @@
   ],
   "cycle_index": 5,
   "prompt_seq": 4,
-  "cta_seq": 93,
+  "cta_seq": 94,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -463,7 +464,8 @@
   },
   "news_used": [
     "AP sources: Staff at U.S. center for AI safety are reporting to the White House, raising independence concerns",
-    "Google Cloud Launches Gemini for Healthcare as an Enterprise Agentic Orchestration Layer"
+    "Google Cloud Launches Gemini for Healthcare as an Enterprise Agentic Orchestration Layer",
+    "Advisors Take Note as OpenAI Launches ChatGPT Business Profiles"
   ],
-  "last_news_date": "2026-11-11"
+  "last_news_date": "2026-11-13"
 }
