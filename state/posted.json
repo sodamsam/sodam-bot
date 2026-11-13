@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-09-21": {
-      "time": "2026-09-21T07:00:39.332338+09:00",
-      "post_id": "18411645583081141",
-      "type": "open"
-    },
     "2026-09-22": {
       "time": "2026-09-22T07:00:44.991291+09:00",
       "post_id": "18095773679373191",
@@ -303,6 +298,11 @@
       "post_id": "17907706407656568",
       "type": "briefing",
       "instagram_id": "18113403491236124"
+    },
+    "2026-11-13-evening": {
+      "time": "2026-11-13T19:00:44.888779+09:00",
+      "post_id": "18021810197946812",
+      "type": "tip"
     }
   },
   "used_titles": [
@@ -400,7 +400,7 @@
   ],
   "cycle_index": 5,
   "prompt_seq": 4,
-  "cta_seq": 94,
+  "cta_seq": 95,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -460,7 +460,7 @@
     "mistake": 4,
     "card_prompt": 2,
     "term": 2,
-    "tip": 1
+    "tip": 2
   },
   "news_used": [
     "AP sources: Staff at U.S. center for AI safety are reporting to the White House, raising independence concerns",
