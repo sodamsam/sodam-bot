@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-09-24": {
-      "time": "2026-09-24T07:00:35.997548+09:00",
-      "post_id": "18117278642067094",
-      "type": "open"
-    },
     "2026-09-25": {
       "time": "2026-09-25T07:00:33.909262+09:00",
       "post_id": "17907451182482315",
@@ -303,6 +298,12 @@
       "time": "2026-11-14T18:11:19.779802+09:00",
       "post_id": "17965489629237917",
       "type": "engage"
+    },
+    "2026-11-15": {
+      "time": "2026-11-15T07:00:42.463810+09:00",
+      "post_id": "18117286145035091",
+      "type": "briefing",
+      "instagram_id": "18123081142982117"
     }
   },
   "used_titles": [
@@ -401,7 +402,7 @@
   ],
   "cycle_index": 5,
   "prompt_seq": 4,
-  "cta_seq": 97,
+  "cta_seq": 98,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -467,7 +468,8 @@
   "news_used": [
     "AP sources: Staff at U.S. center for AI safety are reporting to the White House, raising independence concerns",
     "Google Cloud Launches Gemini for Healthcare as an Enterprise Agentic Orchestration Layer",
-    "Advisors Take Note as OpenAI Launches ChatGPT Business Profiles"
+    "Advisors Take Note as OpenAI Launches ChatGPT Business Profiles",
+    "Microsoft outage update: Company says Microsoft 365 services fully restored after Outlook, Teams and AI assistant Copilot impacted"
   ],
-  "last_news_date": "2026-11-13"
+  "last_news_date": "2026-11-15"
 }
