@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-09-25": {
-      "time": "2026-09-25T07:00:33.909262+09:00",
-      "post_id": "17907451182482315",
-      "type": "howto"
-    },
     "2026-09-26": {
       "time": "2026-09-26T07:00:33.284841+09:00",
       "post_id": "17971108995148721",
@@ -305,6 +300,11 @@
       "type": "open",
       "instagram_id": "18175632046415849",
       "reel_id": "17975249901178870"
+    },
+    "2026-11-15-evening": {
+      "time": "2026-11-15T18:13:15.672978+09:00",
+      "post_id": "18334347454262865",
+      "type": "mistake"
     }
   },
   "used_titles": [
@@ -403,7 +403,7 @@
   ],
   "cycle_index": 6,
   "prompt_seq": 4,
-  "cta_seq": 99,
+  "cta_seq": 100,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -460,7 +460,7 @@
     "메일"
   ],
   "corner_seq": {
-    "mistake": 4,
+    "mistake": 5,
     "card_prompt": 2,
     "term": 2,
     "tip": 2,
