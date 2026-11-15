@@ -285,7 +285,7 @@ def _gen_card(topic, number, extra=""):
     import auto_post as ap
     raw = ap._call_gemini(_card_prompt(topic, number, extra), max_tokens=1000)
     parts = ap._split_markers(raw, _CARD_MARKERS)
-    got = {k: parts[k].strip() for k in _CARD_MARKERS}
+    got = {k: ap.strip_ai_tells(parts[k].strip()) for k in _CARD_MARKERS}
     if not all(got[k] for k in ("카드제목", "프롬프트", "결과예시", "후킹")):
         print(f"[저녁 코너] 카드 초안 형식 불량: 비어 있는 항목 {[k for k in _CARD_MARKERS if not got[k]]}")
         return None
