@@ -40,6 +40,7 @@ import hotnews
 import instagram_api
 import notion_api
 import prompt_queue
+import reel_maker
 import threads_api
 
 KST = ZoneInfo("Asia/Seoul")
@@ -1178,6 +1179,9 @@ def write_prompt_post(state, now_kst):
 
 # ── 아침 발행: OPEN/LEAD 글감 큐 ('open' / 'lead') ─────────────
 
+_last_open_card = {}   # 가장 최근에 만든 OPEN 글의 카드 재료 (_gen_open_post가 채운다)
+
+
 def _gen_open_post(topic, closing_line):
     """OPEN 글(프롬프트 전문 공개)의 재료(후킹/프롬프트 전문/예시)를 Gemini로 생성한다."""
     prompt = f"""당신은 스레드(Threads) 계정 '소담 AI 랩'의 운영자 '소담쌤'입니다.
@@ -1207,6 +1211,13 @@ def _gen_open_post(topic, closing_line):
     hook = parts["후킹"].strip() or topic
     prompt_body = parts["프롬프트"].strip() or raw
     example = parts["예시"].strip() or "(예시 생략)"
+    # 인스타용 카드(4장)를 만들 재료. 글과 같은 문장을 그대로 쓴다(새로 지어내지 않는다).
+    _last_open_card.clear()
+    _last_open_card.update({
+        "series": "무료 프롬프트 나눔", "headline": topic, "situation": hook,
+        "prompt": prompt_body, "example": example,
+        "tip": "[ ] 안의 내용만 내 상황에 맞게 바꿔 쓰세요. 결과가 아쉬우면 \"더 짧게\", \"표로 정리해서\"처럼 한 번 더 부탁해 보세요.",
+    })
 
     text = (
         f"{hook}\n\n"
@@ -1261,7 +1272,7 @@ def write_queued_prompt_post(state, now_kst, forced_type=None):
     """OPEN/LEAD 큐에서 오늘 쓸 글감을 뽑아 글을 작성한다.
 
     LEAD 요일인데 LEAD 큐가 비어 있으면 OPEN으로 자동 대체하고 경고 로그를 남긴다.
-    반환: {"text", "post_type", "topic", "keyword", "cta_idx", "queue_left"}
+    반환: {"text", "post_type", "topic", "keyword", "cta_idx", "queue_left", "card"}
     """
     prompt_queue.migrate_legacy_published_keywords(state, PROMPT_BANK, AREAS)
 
@@ -1297,8 +1308,11 @@ def write_queued_prompt_post(state, now_kst, forced_type=None):
 
     closing_line, cta_idx = cta.pick_cta(post_type, keyword=item["keyword"])
 
+    card = None
     if post_type == "open":
+        _last_open_card.clear()
         text = _gen_open_post(item["topic"], closing_line)
+        card = dict(_last_open_card) or None
     else:
         text = _gen_lead_post(item["topic"], closing_line)
 
@@ -1313,6 +1327,7 @@ def write_queued_prompt_post(state, now_kst, forced_type=None):
         "keyword": item["keyword"],
         "cta_idx": cta_idx,
         "queue_left": left,
+        "card": card,          # OPEN 글만: 인스타용 카드 4장을 만들 재료 (없으면 None)
     }
 
 
@@ -1442,9 +1457,65 @@ def run_evening(state, now_kst, date_str, forced=None):
         jpgs = [card_news.save_jpeg_copy(pth) for pth in paths]
         urls = _publish_card_files(paths + jpgs)
         image_urls, ig_image_urls = urls[:len(paths)], urls[len(paths):]
+        result["ig_local_paths"] = jpgs
     result["image_urls"] = image_urls
     result["ig_image_urls"] = ig_image_urls
     return result
+
+
+def make_open_cards(card, date_str):
+    """무료 프롬프트 나눔(OPEN) 글을 인스타용 카드 4장으로 만들어 공개한다.
+
+    스레드에는 지금처럼 글만 나가고, 이 카드는 인스타에만 쓴다(그래서 JPEG만 올린다).
+    반환: (JPEG 공개 URL 목록, 로컬 JPEG 경로 목록)
+    """
+    out_dir = os.path.join(_card_dir(), f"open_{date_str}")
+    paths = card_news.generate_prompt_slides(card, out_dir, stem="open")
+    jpgs = [card_news.save_jpeg_copy(pth) for pth in paths]
+    for pth in paths:          # PNG 원본은 저장소에 올리지 않는다
+        os.remove(pth)
+    return _publish_card_files(jpgs), jpgs
+
+
+def _publish_video_file(local_path):
+    """릴스 영상(mp4)을 저장소에 올리고, 인스타가 가져갈 수 있는 주소 후보를 돌려준다.
+
+    1순위는 jsDelivr(영상 형식으로 내려줘서 인스타가 잘 받는다. 커밋 번호로 주소를 고정해 바로 열린다),
+    2순위는 raw.githubusercontent.com 이다.
+    """
+    raw_url = _publish_card_files([local_path])[0]
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    rel = os.path.relpath(local_path, repo_dir).replace(os.sep, "/")
+    owner_repo = os.environ.get("GITHUB_REPOSITORY", "sodamsam/sodam-bot")
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_dir, capture_output=True, text=True).stdout.strip()
+    urls = [raw_url]
+    if sha:
+        urls.insert(0, f"https://cdn.jsdelivr.net/gh/{owner_repo}@{sha}/{rel}")
+    return urls
+
+
+REELS_ENABLED = True          # 여러 장 카드를 릴스(세로 영상+배경음악)로도 올린다. 끄려면 False
+REEL_SHARE_TO_FEED = False    # False: 릴스 탭에만 노출(피드 격자에 같은 내용이 두 번 보이지 않게). True: 피드에도 노출
+
+
+def publish_reel_from_cards(jpg_paths, text, content_type, date_str, tags=None):
+    """카드 JPEG들을 릴스 영상으로 만들어 인스타에 올린다. 성공하면 media id, 조건이 안 되면 None."""
+    if not (REELS_ENABLED and len(jpg_paths) >= 2):
+        return None
+    out_path = os.path.join(_card_dir(), f"reel_{content_type}_{date_str}.mp4")
+    reel_maker.make_reel(jpg_paths, out_path, seed=date_str)
+    if _dry_run():
+        print(f"[미리보기] 릴스 영상 저장 → {out_path}")
+        return None
+    caption = instagram_api.build_caption(text, content_type, tags)
+    last_error = None
+    for url in _publish_video_file(out_path):
+        try:
+            return instagram_api.publish_reel(url, caption, share_to_feed=REEL_SHARE_TO_FEED)
+        except Exception as e:   # 다음 주소로 한 번 더 시도
+            last_error = e
+            print(f"[릴스] 이 주소로는 실패, 다음 주소로 시도합니다: {e}")
+    raise last_error
 
 
 def publish_post(text, image_urls, topic_tag):
@@ -1506,6 +1577,7 @@ def main():
     text = None
     image_urls = []          # 카드뉴스 이미지 공개 URL (브리핑 1장 / 프롬프트 카드 4장)
     ig_image_urls = []       # 같은 카드의 JPEG 사본 URL (인스타용)
+    ig_local_paths = []      # 같은 JPEG의 로컬 경로 (릴스 영상 재료)
     ig_tags = None           # 인스타 해시태그(뉴스 카드는 소식 내용에서 만든다)
     news_kind = None         # 뉴스 카드의 종류(tool/support) — 번갈아 내기 위해 기록
     briefing_topic = None    # briefing일 때만 채워짐 (발행 기록용)
@@ -1522,6 +1594,7 @@ def main():
         if ev:
             text, content_type, image_urls = ev["text"], ev["kind"], ev["image_urls"]
             ig_image_urls = ev.get("ig_image_urls", [])
+            ig_local_paths = ev.get("ig_local_paths", [])
             log_topic, evening_kind = ev["topic"], ev["kind"]
         else:
             print("[저녁 코너] 이번엔 만들지 못해 검증된 프롬프트 글로 대체합니다")
@@ -1593,13 +1666,26 @@ def main():
                 howto_keyword = howto_result["keyword"]
                 content_type = "howto"
 
+    # 무료 프롬프트 나눔(OPEN): 스레드는 지금처럼 글만, 인스타에는 같은 내용을 카드 4장으로 함께 올린다.
+    open_card = (queue_result or {}).get("card") if content_type == "open" else None
+    if open_card and not ig_image_urls and (dry or instagram_api.enabled()):
+        try:
+            ig_image_urls, ig_local_paths = make_open_cards(open_card, date_str)
+        except Exception as e:   # 카드를 못 만들어도 스레드 글은 그대로 나간다
+            print(f"::warning::OPEN 글 인스타 카드 생성 실패 (스레드 글은 정상 진행): {e}")
+            ig_image_urls, ig_local_paths = [], []
+
     topic_tag = (corners.CORNERS[evening_kind]["tag"] if evening_kind
                  else corners.MORNING_TAGS.get(content_type))
     print(f"[유형] {content_type} (주제 태그: {topic_tag}, 이미지 {len(image_urls)}장)")
     print(f"[초안] {text[:80]}...")
 
     if dry:
-        _write_preview(content_type, text, image_urls, topic_tag, now_kst)
+        _write_preview(content_type, text, image_urls or ig_image_urls, topic_tag, now_kst)
+        try:
+            publish_reel_from_cards(ig_local_paths, text, content_type, date_str, tags=ig_tags)
+        except Exception as e:
+            print(f"::warning::릴스 미리보기 생성 실패: {e}")
         return
 
     post_id = publish_post(text, image_urls, topic_tag)
@@ -1612,6 +1698,15 @@ def main():
             print(f"[인스타 발행 완료] media id: {instagram_id}")
         except Exception as e:   # 스레드 글은 이미 나갔으므로 인스타 실패가 하루 발행을 실패로 만들지 않는다
             print(f"::warning::인스타 발행 실패 (스레드 글은 정상 발행됨): {e}")
+
+    reel_id = None
+    if ig_local_paths and instagram_api.enabled():
+        try:
+            reel_id = publish_reel_from_cards(ig_local_paths, text, content_type, date_str, tags=ig_tags)
+            if reel_id:
+                print(f"[인스타 릴스 발행 완료] media id: {reel_id}")
+        except Exception as e:   # 릴스는 덤이다. 실패해도 글·카드 발행에는 영향이 없다
+            print(f"::warning::인스타 릴스 발행 실패 (글·카드는 정상 발행됨): {e}")
 
     append_posted_log({
         "date_kst": now_kst.isoformat(),
@@ -1637,6 +1732,8 @@ def main():
     state["posted"][key] = {"time": now_kst.isoformat(), "post_id": post_id, "type": content_type}
     if instagram_id:
         state["posted"][key]["instagram_id"] = instagram_id
+    if reel_id:
+        state["posted"][key]["reel_id"] = reel_id
     if slot == "morning":
         if content_type != "benefit" and not news_inserted:
             state["cycle_index"] = (state["cycle_index"] + 1) % len(POST_CYCLE)

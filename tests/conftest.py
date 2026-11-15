@@ -20,7 +20,9 @@ import pytest
 import auto_post
 import cta
 import hotnews
+import reel_maker
 
+REAL_MAKE_REEL = reel_maker.make_reel             # 가짜로 바꾸기 전의 진짜 영상 생성 함수
 REAL_SEARCH_INTEREST = hotnews.search_interest   # 네트워크 차단 전의 원래 함수(fetcher를 직접 넘기는 테스트용)
 
 
@@ -37,3 +39,18 @@ def no_real_news_fetch(monkeypatch):
     """테스트가 실제 인터넷(구글 뉴스·네이버 자동완성)에 접속하지 않게 막는다. 필요한 테스트가 직접 다시 지정한다."""
     monkeypatch.setattr(hotnews, "fetch_news_kr", lambda *a, **k: [])
     monkeypatch.setattr(hotnews, "search_interest", lambda *a, **k: {})
+
+
+@pytest.fixture(autouse=True)
+def no_real_card_publish(tmp_path, monkeypatch):
+    """테스트가 실제 저장소에 카드·영상을 커밋·푸시하거나 ffmpeg을 돌리지 않게 막는다. 필요한 테스트가 직접 다시 지정한다."""
+    monkeypatch.setattr(auto_post, "_card_dir", lambda: str(tmp_path / "cards"))
+    monkeypatch.setattr(auto_post, "_publish_card_files",
+                        lambda paths: [f"https://img/{os.path.basename(p)}" for p in paths])
+    monkeypatch.setattr(auto_post, "_publish_video_file", lambda path: [f"https://vid/{os.path.basename(path)}"])
+
+    def fake_reel(image_paths, out_path, seed="", bgm_path=None):
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        open(out_path, "wb").write(b"mp4")
+        return out_path
+    monkeypatch.setattr(reel_maker, "make_reel", fake_reel)

@@ -10,6 +10,8 @@ Meta 화면에는 앱별 번호와 인스타 계정 번호가 함께 보여 헷�
   - 이미지는 JPEG만 가능하고 공개 URL이어야 한다 (그래서 카드의 JPEG 사본을 저장소에 함께 올린다)
   - 캐러셀은 2~10장, 비율은 4:5(1080x1350)~1.91:1
   - 캡션 2,200자, 해시태그 30개까지
+  - 릴스는 공개 URL의 mp4(H.264 + AAC, 세로 9:16, 3초~15분). 인스타 음원은 이 방식으로 붙일 수 없어
+    배경음악을 영상 파일 안에 미리 넣는다(reel_maker.py)
 """
 import os
 import time
@@ -22,6 +24,7 @@ TIMEOUT = 30
 # 글 종류별 해시태그 (인스타는 검색·추천에 해시태그가 쓰인다. 스레드 글에는 붙이지 않는다)
 HASHTAGS = {
     "card_prompt": "#AI프롬프트 #챗GPT #AI활용 #직장인AI #업무자동화 #프롬프트 #소담AI랩",
+    "open": "#AI프롬프트 #챗GPT #AI활용 #프롬프트 #소담AI랩",
     "briefing": "#AI뉴스 #AI소식 #챗GPT #클로드 #AI활용 #소담AI랩",
 }
 DEFAULT_HASHTAGS = "#AI활용 #챗GPT #직장인AI #소담AI랩"
@@ -116,3 +119,13 @@ def publish_cards(image_urls, text, content_type, tags=None):
     if len(image_urls) >= 2:
         return publish_carousel(image_urls, caption)
     return publish_image(image_urls[0], caption)
+
+
+def publish_reel(video_url, caption, share_to_feed=False):
+    """릴스(세로 영상) 게시. 영상 처리에 시간이 걸려 이미지보다 오래 기다린다."""
+    uid = account_id()
+    container = _request("POST", f"/{uid}/media", {
+        "media_type": "REELS", "video_url": video_url, "caption": caption,
+        "share_to_feed": "true" if share_to_feed else "false"})
+    _wait_ready(container["id"], timeout=300, interval=5)
+    return _request("POST", f"/{uid}/media_publish", {"creation_id": container["id"]}).get("id")
