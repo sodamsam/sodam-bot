@@ -154,7 +154,7 @@ def run_env(tmp_path, monkeypatch):
 def test_card_post_goes_to_instagram_with_jpeg_urls(run_env, monkeypatch):
     monkeypatch.setattr(instagram_api, "enabled", lambda: True)
     monkeypatch.setattr(instagram_api, "publish_cards",
-                        lambda urls, text, kind: run_env["ig"].append((urls, kind)) or "ig-9")
+                        lambda urls, text, kind, tags=None: run_env["ig"].append((urls, kind)) or "ig-9")
     auto_post.main()
     urls, kind = run_env["ig"][0]
     assert kind == "card_prompt" and len(urls) == 4 and all(u.endswith(".jpg") for u in urls)

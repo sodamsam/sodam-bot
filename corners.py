@@ -143,6 +143,20 @@ TEXT_CLOSINGS = {
 }
 CARD_CLOSINGS = ["넘겨서 4장 다 보세요. 저장해두면 두고두고 써요", "카드 넘겨보세요. 저장해두고 필요할 때 꺼내 쓰세요"]
 
+# 저장해두고 쓰는 카드는 '많이 찾는 업무'부터 만든다. 네이버·구글 검색에서 "챗GPT 프롬프트"와 함께 자주 나오는
+# 업무(엑셀·메일·자기소개서·보고서 요약·번역·블로그·상세페이지 …) 순서이고, 생활 메모류는 뒤로 미룬다.
+CARD_PRIORITY = ["엑셀", "메일", "요약", "자소서", "번역", "회의", "블로그", "홍보", "상세", "면접", "리뷰", "발표",
+                 "공문", "계약", "주보", "클레임", "사업", "신청", "할일", "가계부", "여행", "식단", "중고", "비교",
+                 "인상", "공지", "단골", "매출", "경쟁", "매뉴얼", "인수", "병원", "숙제", "경조사", "선물", "이사",
+                 "설명", "집안일", "대화", "습관", "반려"]
+
+
+def demand_ordered_topics(topics):
+    """주제 목록을 CARD_PRIORITY 순으로 정렬한다(목록에 없는 주제는 뒤쪽, 원래 순서 유지)."""
+    rank = {kw: i for i, kw in enumerate(CARD_PRIORITY)}
+    return sorted(topics, key=lambda t: rank.get(t["keyword"], len(CARD_PRIORITY)))
+
+
 # 통계·연구 인용은 근거를 확인할 수 없으니 이 코너에서는 쓰지 않는다
 _BANNED_PHRASES = ("연구에 따르면", "연구 결과", "조사 결과", "통계에 따르면", "통계", "전문가들은", "보고서에 따르면",
                    "설문", "퍼센트", "%", "수강생", "어제 제가", "며칠 전 제가", "제 지인", "한 분이")
@@ -311,8 +325,8 @@ def write_evening_post(state, now_kst, forced=None):
     label = f"{cfg['emoji']} {cfg['label']} #{number}"
 
     if kind == "card_prompt":
-        topics = prompt_queue.ordered_topics(ap.PROMPT_BANK, ap.AREAS)
-        t = topics[-1 - (seq % len(topics))]          # 아침 큐와 겹치지 않도록 뒤에서부터
+        topics = demand_ordered_topics(prompt_queue.ordered_topics(ap.PROMPT_BANK, ap.AREAS))
+        t = topics[seq % len(topics)]
         topic = (t["topic"], t["keyword"])
         got = None
         for attempt in range(2):

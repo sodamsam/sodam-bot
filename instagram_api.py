@@ -74,9 +74,12 @@ def _wait_ready(container_id, timeout=90, interval=3):
     raise RuntimeError("인스타 컨테이너 처리가 시간 안에 끝나지 않았습니다")
 
 
-def build_caption(text, content_type):
-    """스레드 본문을 인스타 캡션으로 만든다: 본문 + 해시태그. 2,200자를 넘으면 본문을 줄인다."""
-    tags = HASHTAGS.get(content_type, DEFAULT_HASHTAGS)
+def build_caption(text, content_type, tags=None):
+    """스레드 본문을 인스타 캡션으로 만든다: 본문 + 해시태그. 2,200자를 넘으면 본문을 줄인다.
+
+    tags를 주면(뉴스 카드는 소식 내용에서 만든 해시태그) 그걸 쓰고, 없으면 글 종류별 기본 해시태그를 쓴다.
+    """
+    tags = tags or HASHTAGS.get(content_type, DEFAULT_HASHTAGS)
     room = 2200 - len(tags) - 2
     body = text if len(text) <= room else text[:room - 1] + "…"
     return f"{body}\n\n{tags}"
@@ -107,9 +110,9 @@ def publish_carousel(image_urls, caption):
     return _request("POST", f"/{uid}/media_publish", {"creation_id": parent["id"]}).get("id")
 
 
-def publish_cards(image_urls, text, content_type):
+def publish_cards(image_urls, text, content_type, tags=None):
     """카드 이미지 URL 목록을 인스타에 올린다. 한 장이면 단일 게시물, 여러 장이면 캐러셀."""
-    caption = build_caption(text, content_type)
+    caption = build_caption(text, content_type, tags)
     if len(image_urls) >= 2:
         return publish_carousel(image_urls, caption)
     return publish_image(image_urls[0], caption)

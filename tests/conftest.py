@@ -21,6 +21,8 @@ import auto_post
 import cta
 import hotnews
 
+REAL_SEARCH_INTEREST = hotnews.search_interest   # 네트워크 차단 전의 원래 함수(fetcher를 직접 넘기는 테스트용)
+
 
 @pytest.fixture(autouse=True)
 def isolate_repo_files(tmp_path, monkeypatch):
@@ -32,5 +34,6 @@ def isolate_repo_files(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_news_fetch(monkeypatch):
-    """테스트가 실제 인터넷(구글 뉴스)에서 핫뉴스를 가져오지 않게 막는다. 필요한 테스트가 직접 다시 지정한다."""
-    monkeypatch.setattr(hotnews, "fetch_global", lambda *a, **k: [])
+    """테스트가 실제 인터넷(구글 뉴스·네이버 자동완성)에 접속하지 않게 막는다. 필요한 테스트가 직접 다시 지정한다."""
+    monkeypatch.setattr(hotnews, "fetch_news_kr", lambda *a, **k: [])
+    monkeypatch.setattr(hotnews, "search_interest", lambda *a, **k: {})

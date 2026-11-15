@@ -89,7 +89,7 @@ GENERIC_FOLLOW_LINES = [
 BENEFIT_FOLLOW_LINE = "이런 지원 놓치지 않게 계속 찾아서 올려요"
 
 # briefing(주 1회 AI 정책·브리핑 카드뉴스) 글의 고정 마무리 문구.
-BRIEFING_FOLLOW_LINE = "이런 소식, 매주 한 번씩 정리해서 알려드려요"
+BRIEFING_FOLLOW_LINE = "이런 AI 소식, 쉬운 말로 정리해서 알려드려요"
 
 # 정확한 키워드 매칭이 안 될 때, 신청 만능 키워드로 유도하는 문구 풀.
 # comment_bot.py의 DEFAULT_KEYWORD("신청") 로직과 짝을 이룬다:
@@ -128,6 +128,7 @@ def load_posted():
     data.setdefault("corner_seq", {})
     data.setdefault("news_used", [])
     data.setdefault("last_news_date", "")
+    data.setdefault("last_news_kind", "")
     return data
 
 
@@ -757,13 +758,6 @@ def _parse_point(raw):
 
 def _gen_briefing_draft(item, extra_prompt=""):
     """브리핑 초안을 만든다. 반환: (card_dict, 본문 텍스트). 형식이 깨지면 (None, None)."""
-    lang_note = ""
-    if item.get("lang") == "en":
-        lang_note = (
-            "\n\n[기사 언어 안내]\n"
-            "대표 기사와 관련 기사는 영어 기사 제목입니다. 한국어로 옮기되 회사·제품 이름(예: Claude, ChatGPT)은 영어 그대로 쓰고, "
-            "제목에 적힌 사실만 사용하세요. 여러 매체가 같은 소식을 다뤘다는 점은 말해도 됩니다. "
-            "제목만으로 알 수 없는 세부(가격, 날짜, 제공 국가, 기능 범위)는 쓰지 말고 '제공 범위는 계정·국가에 따라 달라요'처럼 일반적으로 안내하세요.")
     related_lines = "\n".join(
         f"- {r['title']} {r.get('summary', '')}" for r in item.get("related", [])
     ) or "(없음)"
@@ -787,7 +781,7 @@ def _gen_briefing_draft(item, extra_prompt=""):
 [분류]
 (다음 중 하나만: {" / ".join(BRIEFING_CATEGORIES)})
 [카드제목]
-(카드 맨 위 큰 글씨. 28자 이내. "무엇이 어떻게 됐다"를 한 문장으로. 예: "구글 문서 안에서 Claude를 바로 쓸 수 있어요")
+(카드 맨 위 큰 글씨. 28자 이내. 독자가 궁금해하는 "무료예요? 얼마예요? 어떻게 쓰나요? 어디서 신청하나요?"에 바로 답이 되게 쓰기. 예: "제미나이, 이제 무료로 더 많이 쓸 수 있어요")
 [포인트1]
 (핵심 제목 | 쉬운 설명)
 [포인트2]
@@ -824,7 +818,7 @@ def _gen_briefing_draft(item, extra_prompt=""):
 [어조 규칙]
 - 부드럽고 친근한 존댓말, 명령·경고·과장·어그로 금지, 질문으로 끝내지 않기
 - [본문]은 250~400자(공백 포함), 한 줄 20자 이내, 단락 사이 빈 줄, 이모지 1개, 해시태그·링크·인사말 금지
-{lang_note}{extra_prompt}"""
+{extra_prompt}"""
     raw = _call_gemini(prompt, max_tokens=1400)
     parts = _split_markers(raw, ("분류", "카드제목", "포인트1", "포인트2", "포인트3", "행동라벨", "행동", "본문"))
 
@@ -867,7 +861,8 @@ def run_briefing(date_str, now_kst, state=None, hot_only=False):
     """
     briefing_item = None
     if state is not None:
-        briefing_item = hotnews.pick_hot_item(used_titles=state.get("news_used", []))
+        briefing_item = hotnews.pick_hot_item(used_titles=state.get("news_used", []),
+                                              prefer_kind=hotnews.opposite(state.get("last_news_kind")))
         if briefing_item:
             briefing_draft = write_briefing_post(briefing_item, now_kst)
             if briefing_draft:
@@ -904,7 +899,7 @@ def _finish_briefing(briefing_item, briefing_draft, date_str):
     card_news.generate_news_card(card, local_path)
     png_url, jpg_url = _publish_card_files([local_path, card_news.save_jpeg_copy(local_path)])
     return {"text": briefing_text, "image_url": png_url, "ig_image_url": jpg_url,
-            "topic": briefing_item["title"]}
+            "topic": briefing_item["title"], "kind": briefing_item.get("kind"), "tags": briefing_item.get("tags")}
 
 
 def write_briefing_post(item, now_kst):
@@ -928,8 +923,7 @@ def write_briefing_post(item, now_kst):
         if not card:
             problems = ["출력 형식(마커·포인트 '제목 | 설명')을 정확히 지킬 것"]
             continue
-        checker = hotnews.find_fabrications_en if item.get("lang") == "en" else find_fabrications
-        problems = checker(text + " " + _card_text(card), source_text)
+        problems = find_fabrications(text + " " + _card_text(card), source_text)
         if not problems:
             print(f"[브리핑 검증] {attempt}차 통과")
             return card, text
@@ -1512,6 +1506,8 @@ def main():
     text = None
     image_urls = []          # 카드뉴스 이미지 공개 URL (브리핑 1장 / 프롬프트 카드 4장)
     ig_image_urls = []       # 같은 카드의 JPEG 사본 URL (인스타용)
+    ig_tags = None           # 인스타 해시태그(뉴스 카드는 소식 내용에서 만든다)
+    news_kind = None         # 뉴스 카드의 종류(tool/support) — 번갈아 내기 위해 기록
     briefing_topic = None    # briefing일 때만 채워짐 (발행 기록용)
     log_topic = ""           # 저녁 코너 주제 (발행 기록용)
     evening_kind = None      # 저녁 코너로 발행됐을 때만 채워짐 (연재 번호 증가용)
@@ -1547,6 +1543,7 @@ def main():
         text = briefing_result["text"]
         image_urls = [briefing_result["image_url"]]
         ig_image_urls = [briefing_result["ig_image_url"]]
+        ig_tags, news_kind = briefing_result.get("tags"), briefing_result.get("kind")
         briefing_topic = briefing_result["topic"]
         content_type = "briefing"
     else:
@@ -1564,6 +1561,7 @@ def main():
                 text = hot["text"]
                 image_urls = [hot["image_url"]]
                 ig_image_urls = [hot["ig_image_url"]]
+                ig_tags, news_kind = hot.get("tags"), hot.get("kind")
                 briefing_topic = hot["topic"]
                 content_type = "briefing"
                 news_inserted = True
@@ -1580,6 +1578,7 @@ def main():
                     text = briefing_result["text"]
                     image_urls = [briefing_result["image_url"]]
                     ig_image_urls = [briefing_result["ig_image_url"]]
+                    ig_tags, news_kind = briefing_result.get("tags"), briefing_result.get("kind")
                     briefing_topic = briefing_result["topic"]
                     content_type = "briefing"
                 else:
@@ -1609,7 +1608,7 @@ def main():
     instagram_id = None
     if ig_image_urls and instagram_api.enabled():
         try:
-            instagram_id = instagram_api.publish_cards(ig_image_urls, text, content_type)
+            instagram_id = instagram_api.publish_cards(ig_image_urls, text, content_type, tags=ig_tags)
             print(f"[인스타 발행 완료] media id: {instagram_id}")
         except Exception as e:   # 스레드 글은 이미 나갔으므로 인스타 실패가 하루 발행을 실패로 만들지 않는다
             print(f"::warning::인스타 발행 실패 (스레드 글은 정상 발행됨): {e}")
@@ -1650,6 +1649,8 @@ def main():
         seqs[evening_kind] = seqs.get(evening_kind, 0) + 1
     if content_type == "briefing":
         state["last_news_date"] = date_str
+        if news_kind:
+            state["last_news_kind"] = news_kind
         state.setdefault("news_used", []).append(briefing_topic or "")
     state["cta_seq"] = state.get("cta_seq", 0) + 1
     save_posted(state)
