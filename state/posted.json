@@ -300,10 +300,11 @@
       "type": "engage"
     },
     "2026-11-15": {
-      "time": "2026-11-15T07:00:42.463810+09:00",
-      "post_id": "18117286145035091",
-      "type": "briefing",
-      "instagram_id": "18123081142982117"
+      "time": "2026-11-15T15:46:02.889057+09:00",
+      "post_id": "17961676935015967",
+      "type": "open",
+      "instagram_id": "18175632046415849",
+      "reel_id": "17975249901178870"
     }
   },
   "used_titles": [
@@ -400,9 +401,9 @@
     "스마트제조혁신협회 “제조AI 매칭상담에 제조기업 300개사 신청” 전년 대비 확대",
     "한국자격증협회, ‘병원코디네이터 자격증’ 무료 수강생 100명 선착순 모집"
   ],
-  "cycle_index": 5,
+  "cycle_index": 6,
   "prompt_seq": 4,
-  "cta_seq": 98,
+  "cta_seq": 99,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -453,7 +454,7 @@
     "회의"
   ],
   "published_keywords_migrated": true,
-  "open_seq": 46,
+  "open_seq": 47,
   "lead_seq": 10,
   "howto_used": [
     "메일"
@@ -471,5 +472,6 @@
     "Advisors Take Note as OpenAI Launches ChatGPT Business Profiles",
     "Microsoft outage update: Company says Microsoft 365 services fully restored after Outlook, Teams and AI assistant Copilot impacted"
   ],
-  "last_news_date": "2026-11-15"
+  "last_news_date": "2026-11-15",
+  "last_news_kind": ""
 }
