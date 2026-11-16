@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-09-28": {
-      "time": "2026-09-28T07:00:36.794174+09:00",
-      "post_id": "17966456190190921",
-      "type": "open"
-    },
     "2026-09-29": {
       "time": "2026-09-29T07:00:36.042015+09:00",
       "post_id": "18119205667937426",
@@ -309,6 +304,12 @@
       "type": "card_prompt",
       "instagram_id": "18120297680045348",
       "reel_id": "18173077312482096"
+    },
+    "2026-11-17": {
+      "time": "2026-11-17T07:00:51.166608+09:00",
+      "post_id": "18030960875877246",
+      "type": "briefing",
+      "instagram_id": "18074123297763097"
     }
   },
   "used_titles": [
@@ -407,7 +408,7 @@
   ],
   "cycle_index": 0,
   "prompt_seq": 4,
-  "cta_seq": 102,
+  "cta_seq": 103,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -474,8 +475,9 @@
     "AP sources: Staff at U.S. center for AI safety are reporting to the White House, raising independence concerns",
     "Google Cloud Launches Gemini for Healthcare as an Enterprise Agentic Orchestration Layer",
     "Advisors Take Note as OpenAI Launches ChatGPT Business Profiles",
-    "Microsoft outage update: Company says Microsoft 365 services fully restored after Outlook, Teams and AI assistant Copilot impacted"
+    "Microsoft outage update: Company says Microsoft 365 services fully restored after Outlook, Teams and AI assistant Copilot impacted",
+    "[AI 활용팁] 제미나이 4 하이드로젠 무료 사용법과 문서 정리"
   ],
-  "last_news_date": "2026-11-15",
-  "last_news_kind": ""
+  "last_news_date": "2026-11-17",
+  "last_news_kind": "tool"
 }
