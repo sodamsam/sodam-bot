@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-09-29": {
-      "time": "2026-09-29T07:00:36.042015+09:00",
-      "post_id": "18119205667937426",
-      "type": "benefit"
-    },
     "2026-09-30": {
       "time": "2026-09-30T07:00:34.821398+09:00",
       "post_id": "17946659178315049",
@@ -310,6 +305,11 @@
       "post_id": "18030960875877246",
       "type": "briefing",
       "instagram_id": "18074123297763097"
+    },
+    "2026-11-17-evening": {
+      "time": "2026-11-17T19:00:45.771277+09:00",
+      "post_id": "18139331044637293",
+      "type": "term"
     }
   },
   "used_titles": [
@@ -408,7 +408,7 @@
   ],
   "cycle_index": 0,
   "prompt_seq": 4,
-  "cta_seq": 103,
+  "cta_seq": 104,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -467,7 +467,7 @@
   "corner_seq": {
     "mistake": 5,
     "card_prompt": 3,
-    "term": 2,
+    "term": 3,
     "tip": 2,
     "engage": 1
   },
