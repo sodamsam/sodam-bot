@@ -1,7 +1,18 @@
 {
-  "dates": {},
-  "used_keywords": [],
-  "used_titles": [],
+  "dates": {
+    "2026-11-18": {
+      "id": "2026-11-18",
+      "title": "챗GPT 프롬프트 설정 방법 초보자 가이드",
+      "kind": "howto",
+      "keyword": "챗GPT 프롬프트 설정 방법"
+    }
+  },
+  "used_keywords": [
+    "챗GPT 프롬프트 설정 방법"
+  ],
+  "used_titles": [
+    "챗GPT 프롬프트 설정 방법 초보자 가이드"
+  ],
   "tried": {
     "2026-11-18": 2
   }
