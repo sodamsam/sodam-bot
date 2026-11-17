@@ -102,3 +102,21 @@ jobs:
             git pull --rebase origin ${{ github.ref_name }} || true
             git push
           fi
+
+      # 오늘 올릴 네이버 블로그 글·이미지를 준비해 둔다(하루 1편, 이미 있으면 건너뜀). 실패해도 다른 발행은 계속한다.
+      - name: 네이버 블로그 글 준비
+        if: ${{ inputs.dry_run != 'yes' }}
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+        run: python naver_post.py
+
+      # 소담 허브(내 PC)가 넘긴 예약 글 중 시각이 된 것을 올린다. 정시에 깨워지는 이 워크플로에 얹어 시간을 맞춘다.
+      - name: 허브 예약 글 발행
+        if: ${{ inputs.dry_run != 'yes' }}
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
+        run: python hub_publish.py

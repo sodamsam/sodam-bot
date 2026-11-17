@@ -1,0 +1,50 @@
+name: 허브 예약 글 발행
+
+on:
+  # 소담 허브(내 PC)가 예약 파일을 올리면 바로 실행
+  push:
+    paths:
+      - "hub_queue/*.json"
+  # 예약 시각이 된 글을 올리기 위한 주기 실행 (GitHub 사정으로 늦게 돌 수 있음)
+  schedule:
+    - cron: "13,43 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "yes로 두면 올리지 않고 무엇을 올릴지만 확인"
+        required: false
+        type: choice
+        options:
+          - ""
+          - "yes"
+
+permissions:
+  contents: write
+
+# 매일 자동 글 발행과 같은 묶음 — 둘이 동시에 저장소에 기록하지 않게 한다
+concurrency:
+  group: auto-post
+  cancel-in-progress: false
+
+jobs:
+  hub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt
+
+      - name: 허브 예약 글 발행
+        env:
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python hub_publish.py

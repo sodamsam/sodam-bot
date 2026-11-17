@@ -1,0 +1,56 @@
+name: 네이버 블로그 글 준비
+
+on:
+  # 아침 자동 발행(auto_post) 뒤에도 같이 돌지만, 그쪽이 빠졌을 때를 대비한 보조 실행
+  schedule:
+    - cron: "23 21,23,1 * * *"   # KST 06:23, 08:23, 10:23 (하루 1편만 만들고 나머지는 건너뜀)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "yes로 두면 글·이미지를 previews 폴더에만 저장 (미리 확인용)"
+        required: false
+        type: choice
+        options:
+          - ""
+          - "yes"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-post
+  cancel-in-progress: false
+
+jobs:
+  naver:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt
+
+      - name: 네이버 블로그 글·이미지 만들기
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python naver_post.py
+
+      - name: 미리보기 저장
+        if: ${{ inputs.dry_run == 'yes' }}
+        run: |
+          git config user.name "auto-post-bot"
+          git config user.email "bot@users.noreply.github.com"
+          if [ -d previews ]; then git add previews/; fi
+          if ! git diff --cached --quiet; then
+            git commit -m "봇: 네이버 글 미리보기 저장"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push
+          fi

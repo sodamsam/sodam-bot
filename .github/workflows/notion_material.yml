@@ -1,0 +1,53 @@
+name: 노션 자료 자동 등록
+
+on:
+  schedule:
+    - cron: "17 0 * * 2,5"   # 화·금 KST 09:17 — 한 번에 자료 1개
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "yes로 두면 노션에 올리지 않고 원고만 previews 폴더에 저장"
+        required: false
+        type: choice
+        options:
+          - ""
+          - "yes"
+
+permissions:
+  contents: write
+
+jobs:
+  material:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt
+
+      - name: 자료 써서 노션에 올리기
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python notion_material.py
+
+      - name: 미리보기 저장
+        if: ${{ inputs.dry_run == 'yes' }}
+        run: |
+          git config user.name "auto-post-bot"
+          git config user.email "bot@users.noreply.github.com"
+          if [ -d previews ]; then git add previews/; fi
+          if ! git diff --cached --quiet; then
+            git commit -m "봇: 노션 자료 미리보기 저장"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push
+          fi

@@ -13,6 +13,8 @@
   구체적인 키워드가 매칭되지 않고 기본 키워드(DEFAULT_KEYWORD, 예: "신청")만
   댓글에 있을 때 이 허브 페이지가 대신 나감.
 """
+import re
+
 import requests
 import config
 
@@ -215,3 +217,98 @@ def match_page(comment_text, pages, post_keyword=None):
         return None
 
     return None
+
+
+# ── 페이지 만들기 (노션 자료 자동 등록용) ─────────────────────
+
+def _rich(text, bold=False):
+    """노션 rich_text 배열. 한 조각은 2,000자까지라 길면 나눈다."""
+    text = str(text)
+    out = []
+    for i in range(0, max(len(text), 1), 1900):
+        piece = {"type": "text", "text": {"content": text[i:i + 1900]}}
+        if bold:
+            piece["annotations"] = {"bold": True}
+        out.append(piece)
+    return out
+
+
+def _inline(text):
+    """한 줄 안의 **굵게** 표시만 살려 rich_text 로 바꾼다."""
+    out = []
+    for n, part in enumerate(re.split(r"\*\*(.+?)\*\*", text)):
+        if part:
+            out += _rich(part, bold=(n % 2 == 1))
+    return out or _rich("")
+
+
+def markdown_to_blocks(md):
+    """자료 원고(간단한 마크다운)를 노션 블록 목록으로 바꾼다. 첫 '# 제목' 줄은 페이지 제목으로 쓰므로 뺀다."""
+    blocks, code, in_code, first_title_done = [], [], False, False
+
+    def block(kind, rich, **extra):
+        blocks.append({"object": "block", "type": kind, kind: {"rich_text": rich, **extra}})
+
+    for line in md.splitlines():
+        if line.strip().startswith("```"):
+            if in_code:
+                block("code", _rich("\n".join(code)), language="plain text")
+                code = []
+            in_code = not in_code
+            continue
+        if in_code:
+            code.append(line)
+            continue
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("# ") and not first_title_done:
+            first_title_done = True
+            continue
+        m = re.match(r"^(#{1,3})\s+(.*)$", s)
+        if m:
+            block("heading_2" if len(m.group(1)) <= 2 else "heading_3", _inline(m.group(2)))
+        elif re.match(r"^\d+[.)]\s+", s):
+            block("numbered_list_item", _inline(re.sub(r"^\d+[.)]\s+", "", s)))
+        elif re.match(r"^[-*]\s+", s):
+            block("bulleted_list_item", _inline(re.sub(r"^[-*]\s+", "", s)))
+        else:
+            block("paragraph", _inline(s))
+    if code:
+        block("code", _rich("\n".join(code)), language="plain text")
+    return blocks
+
+
+def _title_property_name():
+    r = requests.get(f"{NOTION_API}/databases/{config.NOTION_DATABASE_ID}", headers=_headers(), timeout=TIMEOUT)
+    if not r.ok:
+        raise RuntimeError(f"Notion DB 정보 조회 실패: {r.status_code} {r.text[:300]}")
+    for name, prop in r.json().get("properties", {}).items():
+        if prop.get("type") == "title":
+            return name
+    raise RuntimeError("Notion DB에서 제목 속성을 찾지 못했습니다")
+
+
+def create_page(title, keyword, md):
+    """자료 DB에 새 페이지를 만든다. 반환: 노션이 돌려준 페이지 정보(url, public_url 포함)."""
+    blocks = markdown_to_blocks(md)
+    body = {
+        "parent": {"database_id": config.NOTION_DATABASE_ID},
+        "properties": {
+            _title_property_name(): {"title": _rich(title)},
+            config.NOTION_KEYWORD_PROP: {"rich_text": _rich(keyword)},
+        },
+        "children": blocks[:100],
+    }
+    r = requests.post(f"{NOTION_API}/pages", headers=_headers(), json=body, timeout=TIMEOUT)
+    if not r.ok:
+        raise RuntimeError(
+            f"Notion 페이지 만들기 실패: {r.status_code} {r.text[:300]}\n"
+            "[점검] 노션 연결(통합)에 '콘텐츠 입력' 권한이 켜져 있는지 확인하세요.")
+    page = r.json()
+    for i in range(100, len(blocks), 100):      # 한 번에 100블록까지만 받는다
+        rr = requests.patch(f"{NOTION_API}/blocks/{page['id']}/children", headers=_headers(),
+                            json={"children": blocks[i:i + 100]}, timeout=TIMEOUT)
+        if not rr.ok:
+            raise RuntimeError(f"Notion 본문 이어 붙이기 실패: {rr.status_code} {rr.text[:300]}")
+    return page
