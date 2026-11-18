@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-10-02": {
-      "time": "2026-10-02T07:00:33.525008+09:00",
-      "post_id": "18420061087152149",
-      "type": "open"
-    },
     "2026-10-03": {
       "time": "2026-10-03T07:00:37.192898+09:00",
       "post_id": "18389972590203804",
@@ -311,6 +306,12 @@
       "time": "2026-11-18T19:00:49.562268+09:00",
       "post_id": "17896448646436934",
       "type": "mistake"
+    },
+    "2026-11-19": {
+      "time": "2026-11-19T07:00:46.955999+09:00",
+      "post_id": "18390618181235516",
+      "type": "briefing",
+      "instagram_id": "18136630313504522"
     }
   },
   "used_titles": [
@@ -409,7 +410,7 @@
   ],
   "cycle_index": 1,
   "prompt_seq": 4,
-  "cta_seq": 106,
+  "cta_seq": 107,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -477,8 +478,9 @@
     "Google Cloud Launches Gemini for Healthcare as an Enterprise Agentic Orchestration Layer",
     "Advisors Take Note as OpenAI Launches ChatGPT Business Profiles",
     "Microsoft outage update: Company says Microsoft 365 services fully restored after Outlook, Teams and AI assistant Copilot impacted",
-    "[AI 활용팁] 제미나이 4 하이드로젠 무료 사용법과 문서 정리"
+    "[AI 활용팁] 제미나이 4 하이드로젠 무료 사용법과 문서 정리",
+    "넥스트유니온, AI 활용 지도사 1급 자격증 과정 3·4기 교육생 모집"
   ],
-  "last_news_date": "2026-11-17",
-  "last_news_kind": "tool"
+  "last_news_date": "2026-11-19",
+  "last_news_kind": "support"
 }
