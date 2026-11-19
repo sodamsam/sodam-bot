@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-10-03": {
-      "time": "2026-10-03T07:00:37.192898+09:00",
-      "post_id": "18389972590203804",
-      "type": "howto"
-    },
     "2026-10-04": {
       "time": "2026-10-04T07:00:34.561082+09:00",
       "post_id": "18253702465307823",
@@ -312,6 +307,13 @@
       "post_id": "18390618181235516",
       "type": "briefing",
       "instagram_id": "18136630313504522"
+    },
+    "2026-11-19-evening": {
+      "time": "2026-11-19T19:00:44.789768+09:00",
+      "post_id": "17964502146000261",
+      "type": "card_prompt",
+      "instagram_id": "18134236924796923",
+      "reel_id": "17964418025997006"
     }
   },
   "used_titles": [
@@ -410,7 +412,7 @@
   ],
   "cycle_index": 1,
   "prompt_seq": 4,
-  "cta_seq": 107,
+  "cta_seq": 108,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -468,7 +470,7 @@
   ],
   "corner_seq": {
     "mistake": 6,
-    "card_prompt": 3,
+    "card_prompt": 4,
     "term": 3,
     "tip": 2,
     "engage": 1
