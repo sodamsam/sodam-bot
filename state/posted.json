@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-10-08": {
-      "time": "2026-10-08T07:00:33.994983+09:00",
-      "post_id": "18125743204732115",
-      "type": "open"
-    },
     "2026-10-09": {
       "time": "2026-10-09T07:00:33.540821+09:00",
       "post_id": "18129198037834244",
@@ -316,6 +311,12 @@
       "time": "2026-11-21T19:00:40.723735+09:00",
       "post_id": "17920358511466622",
       "type": "engage"
+    },
+    "2026-11-22": {
+      "time": "2026-11-22T07:00:40.830210+09:00",
+      "post_id": "17914038498309133",
+      "type": "briefing",
+      "instagram_id": "18232708792329564"
     }
   },
   "used_titles": [
@@ -415,7 +416,7 @@
   ],
   "cycle_index": 2,
   "prompt_seq": 4,
-  "cta_seq": 112,
+  "cta_seq": 113,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -484,8 +485,9 @@
     "Advisors Take Note as OpenAI Launches ChatGPT Business Profiles",
     "Microsoft outage update: Company says Microsoft 365 services fully restored after Outlook, Teams and AI assistant Copilot impacted",
     "[AI 활용팁] 제미나이 4 하이드로젠 무료 사용법과 문서 정리",
-    "넥스트유니온, AI 활용 지도사 1급 자격증 과정 3·4기 교육생 모집"
+    "넥스트유니온, AI 활용 지도사 1급 자격증 과정 3·4기 교육생 모집",
+    "오픈AI, 아동 성착취물 탐지 이미지 분류기 무료 제공…챗GPT 24시간 정지 도입"
   ],
-  "last_news_date": "2026-11-19",
-  "last_news_kind": "support"
+  "last_news_date": "2026-11-22",
+  "last_news_kind": "tool"
 }
