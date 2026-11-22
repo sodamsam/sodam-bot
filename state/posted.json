@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-10-10": {
-      "time": "2026-10-10T07:00:36.771450+09:00",
-      "post_id": "18151444630540107",
-      "type": "howto"
-    },
     "2026-10-11": {
       "time": "2026-10-11T07:00:39.382276+09:00",
       "post_id": "18064320452685998",
@@ -317,6 +312,12 @@
       "time": "2026-11-22T18:41:39.287647+09:00",
       "post_id": "17998373190026018",
       "type": "mistake"
+    },
+    "2026-11-23": {
+      "time": "2026-11-23T07:00:43.622160+09:00",
+      "post_id": "18102615023532056",
+      "type": "briefing",
+      "instagram_id": "18027240860719527"
     }
   },
   "used_titles": [
@@ -414,9 +415,9 @@
     "한국자격증협회, ‘병원코디네이터 자격증’ 무료 수강생 100명 선착순 모집",
     "2026 에너지바우처, 최대 70만 원 난방비 지원…12월 31일 신청 마감 앞두고 꼭 확인할 사항은?"
   ],
-  "cycle_index": 2,
+  "cycle_index": 3,
   "prompt_seq": 4,
-  "cta_seq": 114,
+  "cta_seq": 115,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -486,8 +487,9 @@
     "Microsoft outage update: Company says Microsoft 365 services fully restored after Outlook, Teams and AI assistant Copilot impacted",
     "[AI 활용팁] 제미나이 4 하이드로젠 무료 사용법과 문서 정리",
     "넥스트유니온, AI 활용 지도사 1급 자격증 과정 3·4기 교육생 모집",
-    "오픈AI, 아동 성착취물 탐지 이미지 분류기 무료 제공…챗GPT 24시간 정지 도입"
+    "오픈AI, 아동 성착취물 탐지 이미지 분류기 무료 제공…챗GPT 24시간 정지 도입",
+    "[해설] 구글, 제미나이 개인 비서 ‘태스크’ 무료 계정으로 확대"
   ],
-  "last_news_date": "2026-11-22",
+  "last_news_date": "2026-11-23",
   "last_news_kind": "tool"
 }
