@@ -56,9 +56,12 @@ def validate(job):
             return "스레드 글이 비어 있습니다"
         if any(len(str(p).strip()) > 500 for p in parts):
             return "스레드 글 한 조각이 500자를 넘습니다"
+    images = job.get("images") or []
+    if images and (len(images) > 10 or any(not str(u).startswith("https://") for u in images)):
+        return "이미지는 https 주소로 10장까지만 쓸 수 있습니다"
     if i:
-        if not str(i.get("headline", "")).strip() or not str(i.get("caption", "")).strip():
-            return "인스타 카드 제목 또는 글이 비어 있습니다"
+        if not str(i.get("caption", "")).strip() or not (images or str(i.get("headline", "")).strip()):
+            return "인스타 글 또는 카드(제목·이미지)가 비어 있습니다"
         if len(i["caption"]) > 2200:
             return "인스타 글이 2,200자를 넘습니다"
     return None
@@ -93,6 +96,15 @@ def claim(path, job):
     return done_path
 
 
+def make_card_urls(job):
+    """글에 붙일 이미지 주소 목록. job["images"](이미 공개된 카드들)가 있으면 그대로 쓰고,
+    없으면 제목·요점으로 소담쌤 카드 한 장을 만든다. 둘 다 없으면 빈 목록."""
+    if job.get("images"):
+        return list(job["images"])[:10]
+    url = make_card_url(job)
+    return [url] if url else []
+
+
 def make_card_url(job):
     """글에 붙일 소담쌤 카드 이미지를 만들어 공개 주소를 돌려준다. 카드 정보가 없으면 None."""
     card = job.get("card") or job.get("instagram") or {}
@@ -112,12 +124,15 @@ def make_card_url(job):
     return auto_post._publish_card_files([jpg])[0]
 
 
-def publish_threads(t, card_url=None):
+def publish_threads(t, card_urls=()):
     import threads_api
     parts = [str(p).strip() for p in t["parts"]]
     tag = t.get("tag") or None
-    if card_url and t.get("with_card", True):
-        post_id = threads_api.publish_image(card_url, parts[0], topic_tag=tag)
+    card_urls = list(card_urls or []) if t.get("with_card", True) else []
+    if len(card_urls) >= 2:
+        post_id = threads_api.publish_carousel(card_urls, parts[0], topic_tag=tag)
+    elif card_urls:
+        post_id = threads_api.publish_image(card_urls[0], parts[0], topic_tag=tag)
     else:
         post_id = threads_api.publish_text(parts[0], topic_tag=tag)
     last = post_id
@@ -126,13 +141,15 @@ def publish_threads(t, card_url=None):
     return post_id
 
 
-def publish_instagram(i, card_url):
+def publish_instagram(i, card_urls):
     import instagram_api
     if not instagram_api.enabled():
         raise RuntimeError("인스타 토큰이 설정되어 있지 않습니다")
-    if not card_url:
+    if not card_urls:
         raise RuntimeError("카드 이미지를 만들지 못했습니다")
-    return instagram_api.publish_image(card_url, i["caption"])
+    if len(card_urls) >= 2:
+        return instagram_api.publish_carousel(card_urls, i["caption"])
+    return instagram_api.publish_image(card_urls[0], i["caption"])
 
 
 def run_job(path, job):
@@ -145,14 +162,14 @@ def run_job(path, job):
     if problem:
         results = {c: {"ok": False, "error": problem} for c in ("threads", "instagram") if job.get(c)}
     else:
-        card_url, card_error = None, ""
+        card_urls, card_error = [], ""
         try:
-            card_url = make_card_url(job)
+            card_urls = make_card_urls(job)
         except Exception as e:  # 카드가 안 만들어져도 스레드 글은 올린다
             card_error = str(e)[:200]
             print(f"[허브][경고] 카드 이미지 실패: {e}")
-        for name, fn in (("threads", lambda: publish_threads(job["threads"], card_url)),
-                         ("instagram", lambda: publish_instagram(job["instagram"], card_url))):
+        for name, fn in (("threads", lambda: publish_threads(job["threads"], card_urls)),
+                         ("instagram", lambda: publish_instagram(job["instagram"], card_urls))):
             if not job.get(name):
                 continue
             try:

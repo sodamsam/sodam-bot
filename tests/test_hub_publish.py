@@ -35,3 +35,24 @@ def test_validate_passes_good_job():
     job = {"threads": {"parts": ["본문", "이어지는 댓글"], "tag": "AI활용"},
            "instagram": {"headline": "제목", "caption": "글"}}
     assert hub_publish.validate(job) is None
+
+
+def test_ready_images_are_used_and_checked():
+    job = {"id": "x", "images": ["https://a/1.jpg", "https://a/2.jpg"],
+           "threads": {"parts": ["본문"]}, "instagram": {"caption": "글"}}
+    assert hub_publish.validate(job) is None
+    assert hub_publish.make_card_urls(job) == ["https://a/1.jpg", "https://a/2.jpg"]
+    assert hub_publish.validate({**job, "images": ["http://a/1.jpg"]}) is not None
+    assert hub_publish.validate({**job, "images": [f"https://a/{n}.jpg" for n in range(11)]}) is not None
+
+
+def test_carousel_vs_single(monkeypatch):
+    import threads_api
+    calls = []
+    monkeypatch.setattr(threads_api, "publish_carousel", lambda urls, text, topic_tag=None: calls.append(("c", len(urls))) or "1")
+    monkeypatch.setattr(threads_api, "publish_image", lambda url, text, topic_tag=None: calls.append(("i", 1)) or "2")
+    monkeypatch.setattr(threads_api, "publish_text", lambda text, topic_tag=None: calls.append(("t", 0)) or "3")
+    hub_publish.publish_threads({"parts": ["a"]}, ["https://x/1", "https://x/2"])
+    hub_publish.publish_threads({"parts": ["a"]}, ["https://x/1"])
+    hub_publish.publish_threads({"parts": ["a"]}, [])
+    assert calls == [("c", 2), ("i", 1), ("t", 0)]
