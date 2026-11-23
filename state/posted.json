@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-10-11": {
-      "time": "2026-10-11T07:00:39.382276+09:00",
-      "post_id": "18064320452685998",
-      "type": "open"
-    },
     "2026-10-12": {
       "time": "2026-10-12T07:00:34.758736+09:00",
       "post_id": "17904265209356476",
@@ -318,6 +313,13 @@
       "post_id": "18102615023532056",
       "type": "briefing",
       "instagram_id": "18027240860719527"
+    },
+    "2026-11-23-evening": {
+      "time": "2026-11-23T19:00:45.421876+09:00",
+      "post_id": "18181745308442849",
+      "type": "card_prompt",
+      "instagram_id": "17968459848214891",
+      "reel_id": "18343880494258816"
     }
   },
   "used_titles": [
@@ -417,7 +419,7 @@
   ],
   "cycle_index": 3,
   "prompt_seq": 4,
-  "cta_seq": 115,
+  "cta_seq": 116,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -475,7 +477,7 @@
   ],
   "corner_seq": {
     "mistake": 7,
-    "card_prompt": 4,
+    "card_prompt": 5,
     "term": 3,
     "tip": 3,
     "engage": 2
