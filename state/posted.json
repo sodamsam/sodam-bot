@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-10-13": {
-      "time": "2026-10-13T07:00:36.921240+09:00",
-      "post_id": "18102788222292283",
-      "type": "open"
-    },
     "2026-10-14": {
       "time": "2026-10-14T07:00:36.747377+09:00",
       "post_id": "18116600357092528",
@@ -322,6 +317,11 @@
       "type": "open",
       "instagram_id": "17901233961655073",
       "reel_id": "18003015569817870"
+    },
+    "2026-11-24-evening": {
+      "time": "2026-11-24T19:00:44.608765+09:00",
+      "post_id": "18082594238592853",
+      "type": "term"
     }
   },
   "used_titles": [
@@ -421,7 +421,7 @@
   ],
   "cycle_index": 4,
   "prompt_seq": 4,
-  "cta_seq": 117,
+  "cta_seq": 118,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -480,7 +480,7 @@
   "corner_seq": {
     "mistake": 7,
     "card_prompt": 5,
-    "term": 3,
+    "term": 4,
     "tip": 3,
     "engage": 2
   },
