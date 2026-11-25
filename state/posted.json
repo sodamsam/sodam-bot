@@ -1,10 +1,5 @@
 {
   "posted": {
-    "2026-10-15": {
-      "time": "2026-10-15T07:00:37.919711+09:00",
-      "post_id": "17875112505636577",
-      "type": "open"
-    },
     "2026-10-16": {
       "time": "2026-10-16T07:00:36.328923+09:00",
       "post_id": "18073396592773418",
@@ -323,6 +318,11 @@
       "post_id": "18130995625844381",
       "type": "briefing",
       "instagram_id": "18130874821649597"
+    },
+    "2026-11-25-evening": {
+      "time": "2026-11-25T19:00:47.977824+09:00",
+      "post_id": "18454225561126484",
+      "type": "mistake"
     }
   },
   "used_titles": [
@@ -422,7 +422,7 @@
   ],
   "cycle_index": 4,
   "prompt_seq": 4,
-  "cta_seq": 119,
+  "cta_seq": 120,
   "material_check": {
     "date": "2026-11-04",
     "has_material": false
@@ -479,7 +479,7 @@
     "메일"
   ],
   "corner_seq": {
-    "mistake": 7,
+    "mistake": 8,
     "card_prompt": 5,
     "term": 4,
     "tip": 3,
